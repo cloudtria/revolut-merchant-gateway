@@ -7,6 +7,7 @@ This is a community-maintained integration and is not an official Revolut or WHM
 ## Features
 
 - Secure Revolut Card Field embedded through WHMCS Remote Input
+- Optional Revolut Pay and device-eligible Apple Pay / Google Pay buttons
 - Checkout styling that follows the active WHMCS primary button color, with a return-to-invoice option
 - Saved cards for merchant-initiated recurring charges
 - WHMCS-managed billing rather than Revolut subscription plans
@@ -40,7 +41,9 @@ The module creates its customer, checkout-session, and transaction-mapping table
 | Setting | Purpose |
 | --- | --- |
 | Secret Key | Revolut Merchant API secret key. |
-| Public Key | Reserved for supported Revolut checkout features. |
+| Public Key | Revolut browser-safe public API key. Required for Revolut Pay and wallets. |
+| Enable Revolut Pay | Displays Revolut Pay and requests permission for future merchant-initiated charges. |
+| Enable Apple Pay / Google Pay | Displays a wallet button when the device and browser support one. Wallets are used for one-time invoice payments. |
 | Environment | `Sandbox` or `Production`. Keys and webhooks must match this environment. |
 | API Version | Merchant API version header. The packaged default is `2026-08-17`. |
 | Webhook Signing Secret | Secret returned when the Revolut webhook is created or retrieved. |
@@ -63,6 +66,16 @@ Refund Description:         Refund for ExampleHost invoice #{invoice_id}
 ```
 
 The invoice and client IDs remain in Revolut metadata for server-side correlation regardless of the customer-visible format.
+
+## Revolut Pay and wallets
+
+Revolut Pay and wallet buttons are opt-in so the established card checkout remains unchanged until they are enabled. Generate or retrieve the browser-safe public API key in Revolut Business, enter it in **Public Key**, then enable the desired options in the WHMCS gateway configuration.
+
+Revolut Pay is initialised with `savePaymentMethodForMerchant: true`. When Revolut returns a saved `revolut_pay` method, the module stores a typed remote token so WHMCS can use it for later merchant-initiated recurring charges. Existing `rv1` saved-card tokens remain compatible.
+
+Apple Pay and Google Pay are offered only for invoices with an amount due and only when Revolut reports that the customer's device and browser can make the payment. These wallet payments do not replace the customer's recurring WHMCS Pay Method.
+
+Google Pay requires no additional domain step. Apple Pay requires production testing and domain registration. Follow Revolut's current [Apple Pay and Google Pay web setup](https://developer.revolut.com/docs/guides/merchant/accept-payments/online-payments/apple-pay-google-pay/web), including serving Apple's current association file from `/.well-known/apple-developer-merchantid-domain-association` and registering the billing domain with Revolut. Revolut states that Apple Pay is unavailable in Sandbox.
 
 ## Webhook configuration
 
@@ -117,6 +130,8 @@ Use Revolut Sandbox before enabling production keys:
 4. Test a decline and confirm the customer-facing error and Gateway Log entry.
 5. Test a partial refund, followed by a full refund on a separate transaction.
 6. Replay a signed webhook and confirm no duplicate transaction is created.
+7. Enable Revolut Pay with a matching public key, complete a payment, and test a later **Attempt Capture** against the saved Revolut Pay method.
+8. On an eligible production device, complete an Apple Pay or Google Pay invoice and confirm the existing recurring Pay Method is unchanged.
 
 ## Security
 

@@ -20,7 +20,9 @@ function revolut_config()
     return [
         'FriendlyName' => ['Type' => 'System', 'Value' => 'Revolut'],
         'secretKey' => ['FriendlyName' => 'Secret Key', 'Type' => 'password', 'Size' => '80'],
-        'publicKey' => ['FriendlyName' => 'Public Key', 'Type' => 'password', 'Size' => '80', 'Description' => 'Reserved for supported Revolut checkout features.'],
+        'publicKey' => ['FriendlyName' => 'Public Key', 'Type' => 'password', 'Size' => '80', 'Description' => 'Required when Revolut Pay or Apple Pay / Google Pay is enabled. This key is designed for browser use.'],
+        'enableRevolutPay' => ['FriendlyName' => 'Enable Revolut Pay', 'Type' => 'yesno', 'Description' => 'Offer Revolut Pay and save authorised methods for WHMCS-managed recurring charges. Requires the Public Key.'],
+        'enableWallets' => ['FriendlyName' => 'Enable Apple Pay / Google Pay', 'Type' => 'yesno', 'Description' => 'Offer available wallets for one-time invoice payments. Requires the Public Key; Apple Pay also requires domain registration.'],
         'environment' => ['FriendlyName' => 'Environment', 'Type' => 'dropdown', 'Options' => ['sandbox' => 'Sandbox', 'production' => 'Production'], 'Default' => 'sandbox'],
         'apiVersion' => ['FriendlyName' => 'API Version', 'Type' => 'text', 'Default' => '2026-08-17'],
         'webhookSecret' => ['FriendlyName' => 'Webhook Signing Secret', 'Type' => 'password', 'Size' => '80'],
@@ -111,7 +113,7 @@ function revolut_capture($params)
         $client = new RevolutClient($params);
         $order = revolut_create_order($client, $params, $saved['customer_id']);
         $payment = $client->post('/api/orders/' . rawurlencode($order['id']) . '/payments', [
-            'saved_payment_method' => ['type' => 'card', 'id' => $saved['payment_method_id'], 'initiator' => 'merchant'],
+            'saved_payment_method' => ['type' => $saved['type'], 'id' => $saved['payment_method_id'], 'initiator' => 'merchant'],
         ], 'whmcs-payment-' . (int) $params['invoiceid']);
         Capsule::table('mod_revolut_transactions')->updateOrInsert(['payment_id' => $payment['id']], ['order_id' => $order['id'], 'invoice_id' => (int) $params['invoiceid'], 'updated_at' => date('Y-m-d H:i:s'), 'created_at' => date('Y-m-d H:i:s')]);
         $state = $payment['state'] ?? '';

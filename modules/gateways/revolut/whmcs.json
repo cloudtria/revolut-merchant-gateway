@@ -7,8 +7,8 @@
   "description": {
     "name": "Revolut Merchant Gateway",
     "tagline": "Accept tokenised card payments through the Revolut Merchant API.",
-    "long": "A community-maintained WHMCS gateway for secure remote card input, saved merchant payment methods, WHMCS-managed recurring charges, refunds, fee recording, transaction information, and signed webhook reconciliation.",
-    "features": ["PCI-conscious remote card input", "Saved payment methods", "WHMCS-managed recurring capture", "Full and partial refunds", "Signed webhook reconciliation", "Configurable customer-facing references"]
+    "long": "A community-maintained WHMCS gateway for secure remote card input, optional Revolut Pay and wallet payments, saved merchant payment methods, WHMCS-managed recurring charges, refunds, fee recording, transaction information, and signed webhook reconciliation.",
+    "features": ["PCI-conscious remote card input", "Optional Revolut Pay and Apple Pay / Google Pay", "Saved payment methods", "WHMCS-managed recurring capture", "Full and partial refunds", "Signed webhook reconciliation", "Configurable customer-facing references"]
   },
   "logo": {
     "filename": "revolut-logo.png"

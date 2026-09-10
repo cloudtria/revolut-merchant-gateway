@@ -24,15 +24,20 @@ try {
         revolut_redirect_page($returnUrl, false, 'Your payment is still being confirmed. The invoice will update automatically.');
     }
     $method = $payment['payment_method'] ?? [];
+    $methodType = strtolower((string) ($method['type'] ?? ''));
+    if (in_array($methodType, ['revolut_pay_card', 'revolut_pay_account'], true)) $methodType = 'revolut_pay';
+    if (in_array($methodType, ['revolut_pay_card', 'revolut_pay_account'], true)) $methodType = 'revolut_pay';
     $paymentMethodId = $method['id'] ?? '';
-    if ($paymentMethodId) {
+    if ($paymentMethodId && in_array($methodType, ['card', 'revolut_pay'], true)) {
         $customerId = $order['customer']['id'] ?? revolut_customer_id_for_client($session->client_id);
-        $remoteToken = RevolutToken::encode($customerId, $paymentMethodId);
+        $remoteToken = RevolutToken::encode($customerId, $paymentMethodId, $methodType);
         $lastFour = $method['card_last_four'] ?? $method['last_four'] ?? '0000';
-        $expiry = preg_replace('/[^0-9]/', '', (string) ($method['card_expiry'] ?? '')); if (strlen($expiry) !== 4) $expiry = '0129';
-        $brand = ucwords(str_replace('_', ' ', $method['card_brand'] ?? $method['brand'] ?? 'Card'));
+        $expiry = preg_replace('/[^0-9]/', '', (string) ($method['card_expiry'] ?? '')); if (strlen($expiry) !== 4) $expiry = $methodType === 'revolut_pay' ? '1299' : '0129';
+        $brand = $methodType === 'revolut_pay'
+            ? 'Revolut Pay'
+            : ucwords(str_replace('_', ' ', $method['card_brand'] ?? $method['brand'] ?? 'Card'));
         if ($session->pay_method_id) updateCardPayMethod($session->client_id, $session->pay_method_id, $expiry, null, null, $remoteToken);
-        else createCardPayMethod($session->client_id, 'revolut', $lastFour, $expiry, $brand, null, null, $remoteToken, 'billing', 'Revolut - ' . $brand . '-' . $lastFour);
+        else createCardPayMethod($session->client_id, 'revolut', $lastFour, $expiry, $brand, null, null, $remoteToken, 'billing', $methodType === 'revolut_pay' ? 'Revolut Pay' : 'Revolut - ' . $brand . '-' . $lastFour);
     }
     WHMCS\Database\Capsule::table('mod_revolut_transactions')->updateOrInsert(['payment_id' => $payment['id']], ['order_id' => $session->order_id, 'invoice_id' => $session->invoice_id, 'updated_at' => date('Y-m-d H:i:s'), 'created_at' => date('Y-m-d H:i:s')]);
     if ($session->invoice_id) {
