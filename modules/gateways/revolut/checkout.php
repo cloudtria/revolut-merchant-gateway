@@ -1,84 +1,29 @@
 <?php
 require_once __DIR__ . '/../../../init.php';
 App::load_function('gateway');
-require_once __DIR__ . '/lib/RevolutClient.php';
 require_once __DIR__ . '/lib/Helpers.php';
-
-use Cloudtria\WHMCS\Revolut\Helpers;
-use Cloudtria\WHMCS\Revolut\RevolutClient;
+revolut_require_library();
 
 $gateway = getGatewayVariables('revolut');
-if (empty($gateway['type'])) { http_response_code(503); exit('Revolut gateway is not active.'); }
-
-try {
-    $ctx = Helpers::verifyContext($_POST['context'] ?? '', $gateway['secretKey']);
-    if (empty($ctx['client_id']) || empty($ctx['email'])) throw new RuntimeException('Invalid customer context.');
-
-    $client = new RevolutClient($gateway);
-    $customerId = Helpers::getOrCreateCustomer($client, $ctx['client_id'], [
-        'firstname' => $ctx['firstname'], 'lastname' => $ctx['lastname'], 'email' => $ctx['email'], 'phonenumber' => $ctx['phone'],
-    ]);
-    $isPayment = $ctx['action'] === 'payment';
-    $minor = $isPayment ? Helpers::minorUnits($ctx['amount'], $ctx['currency']) : 0;
-    $reference = $isPayment ? ('whmcs-invoice-' . (int) $ctx['invoice_id']) : ('whmcs-paymethod-client-' . (int) $ctx['client_id'] . '-' . bin2hex(random_bytes(4)));
-    $orderPayload = [
-        'amount' => $minor,
-        'currency' => $ctx['currency'] ?: 'NZD',
-        'customer' => ['id' => $customerId],
-        'capture_mode' => 'automatic',
-        'description' => $isPayment ? ('WHMCS invoice #' . (int) $ctx['invoice_id']) : 'Save payment method for WHMCS',
-        'merchant_order_data' => ['reference' => $reference],
-        'metadata' => [
-            'whmcs_client_id' => (string) ((int) $ctx['client_id']),
-            'whmcs_invoice_id' => (string) ((int) $ctx['invoice_id']),
-            'whmcs_action' => $ctx['action'],
-        ],
-    ];
-    $order = $client->createOrder($orderPayload, 'whmcs-ui-' . sha1($_POST['context'] . '|' . $reference));
-    if (empty($order['id']) || empty($order['token'])) throw new RuntimeException('Revolut did not return an order ID/token.');
-
-    $ctx['revolut_customer_id'] = $customerId;
-    $ctx['revolut_order_id'] = $order['id'];
-    $ctx['reference'] = $reference;
-    $ctx['ts'] = time();
-    $finishContext = Helpers::signContext($ctx, $gateway['secretKey']);
-    $sdkUrl = $gateway['sdkUrl'] ?: 'https://merchant.revolut.com/embed.js';
-    $mode = ($gateway['environment'] ?? 'sandbox') === 'production' ? 'prod' : 'sandbox';
-    $callback = rtrim($gateway['systemurl'], '/') . '/modules/gateways/callback/revolut.php';
-    $name = trim($ctx['firstname'] . ' ' . $ctx['lastname']);
-    $billing = array_filter([
-        'countryCode' => $ctx['country'], 'region' => $ctx['state'], 'city' => $ctx['city'], 'postcode' => $ctx['postcode'],
-        'streetLine1' => $ctx['address1'], 'streetLine2' => $ctx['address2'],
-    ], function ($v) { return $v !== ''; });
-} catch (Throwable $e) {
-    http_response_code(400);
-    exit('<div style="font-family:sans-serif;color:#b91c1c;padding:20px">Unable to initialise Revolut checkout: ' . htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8') . '</div>');
-}
-?><!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<style>body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;margin:0;padding:18px;color:#111827}.box{max-width:620px;margin:auto}.field{min-height:52px;margin:12px 0}.btn{width:100%;padding:12px 16px;border:0;border-radius:8px;background:#111827;color:#fff;font-weight:600;cursor:pointer}.btn:disabled{opacity:.5}.msg{margin-top:10px;font-size:14px;color:#b91c1c}</style>
-<script src="<?= htmlspecialchars($sdkUrl, ENT_QUOTES, 'UTF-8') ?>"></script></head>
-<body><div class="box"><div id="card-field" class="field"></div><button id="pay" class="btn" disabled><?= $isPayment ? 'Pay securely' : 'Save card' ?></button><div id="msg" class="msg"></div></div>
-<form id="complete" method="post" action="<?= htmlspecialchars($callback, ENT_QUOTES, 'UTF-8') ?>"><input type="hidden" name="context" value="<?= htmlspecialchars($finishContext, ENT_QUOTES, 'UTF-8') ?>"></form>
-<script>
-(async function(){
-  const msg=document.getElementById('msg'), btn=document.getElementById('pay');
-  try {
-    const instance=await RevolutCheckout(<?= json_encode($order['token']) ?>, <?= json_encode($mode) ?>);
-    const card=instance.createCardField({
-      target:document.getElementById('card-field'),
-      onSuccess:function(){document.getElementById('complete').submit();},
-      onError:function(err){msg.textContent=(err&&err.message)?err.message:String(err||'Payment failed');btn.disabled=false;},
-      onValidation:function(errors){btn.disabled=Array.isArray(errors)&&errors.length>0;}
-    });
-    btn.disabled=false;
-    btn.addEventListener('click',function(){btn.disabled=true;msg.textContent='';card.submit({
-      name:<?= json_encode($name) ?>,
-      email:<?= json_encode($ctx['email']) ?>,
-      phone:<?= json_encode($ctx['phone']) ?>,
-      savePaymentMethodFor:'merchant',
-      billingAddress:<?= json_encode($billing, JSON_UNESCAPED_SLASHES) ?>
-    });});
-  } catch(e) { msg.textContent=e&&e.message?e.message:String(e); }
-})();
-</script></body></html>
+if (empty($gateway['type'])) { http_response_code(503); exit('Payment method unavailable.'); }
+revolut_ensure_tables();
+$token = preg_replace('/[^a-f0-9]/', '', (string) ($_POST['session'] ?? $_GET['session'] ?? ''));
+$session = $token ? WHMCS\Database\Capsule::table('mod_revolut_sessions')->where('token', $token)->first() : null;
+if (!$session || strtotime($session->expires_at) < time()) { http_response_code(410); exit('This payment session has expired. Please return to the invoice and try again.'); }
+$data = json_decode($session->customer_json, true);
+$sdk = htmlspecialchars($gateway['checkoutSdkUrl'] ?: 'https://merchant.revolut.com/embed.js', ENT_QUOTES, 'UTF-8');
+$environment = ($gateway['environment'] ?? 'sandbox') === 'production' ? 'prod' : 'sandbox';
+$complete = rtrim($gateway['systemurl'], '/') . '/modules/gateways/revolut/complete.php?session=' . $token;
+?>
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Secure card payment</title><style>
+*{box-sizing:border-box}body{margin:0;background:#f4f6f8;color:#17212b;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.wrap{max-width:570px;margin:0 auto;padding:24px 18px}.card{background:#fff;border:1px solid #e3e8ef;border-radius:18px;box-shadow:0 12px 34px rgba(22,34,51,.10);padding:28px}.top{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;margin-bottom:28px}.eyebrow{font-size:13px;color:#637083;margin-bottom:5px}.title{font-size:22px;font-weight:750}.amount{text-align:right;font-size:25px;font-weight:800;white-space:nowrap}.currency{font-size:13px;color:#637083}.label{display:block;font-weight:650;font-size:14px;margin-bottom:9px}#field{min-height:54px;border:1px solid #cbd3dd;border-radius:11px;padding:15px 13px;background:white;transition:.15s}.field-focused{border-color:#5b5ff5;box-shadow:0 0 0 3px rgba(91,95,245,.13)}.field-invalid{border-color:#d92d20;box-shadow:0 0 0 3px rgba(217,45,32,.10)}.field-completed{border-color:#12a36d}.error{display:none;margin-top:12px;padding:11px 13px;border-radius:9px;background:#fff1f0;color:#9d1c14;font-size:14px;line-height:1.4}.error.show{display:block}button{width:100%;height:52px;margin-top:20px;border:0;border-radius:11px;background:#101828;color:#fff;font-size:16px;font-weight:720;cursor:pointer;transition:.15s}button:hover{background:#273346}button:disabled{cursor:not-allowed;background:#98a2b3}.spinner{display:none;width:18px;height:18px;border:2px solid rgba(255,255,255,.45);border-top-color:white;border-radius:50%;animation:spin .7s linear infinite;margin-right:9px;vertical-align:-3px}.processing .spinner{display:inline-block}.help{text-align:center;color:#667085;font-size:12px;line-height:1.5;margin:16px 10px 0}@keyframes spin{to{transform:rotate(360deg)}}@media(max-width:480px){.wrap{padding:10px}.card{padding:21px 17px;border-radius:13px}.top{display:block}.amount{text-align:left;margin-top:12px}}
+</style></head><body><main class="wrap"><section class="card"><div class="top"><div><div class="eyebrow">Secure payment</div><div class="title">Invoice #<?= (int) $session->invoice_id ?></div></div><div class="amount"><?= htmlspecialchars(number_format((float)$data['amount'],2),ENT_QUOTES,'UTF-8') ?> <span class="currency"><?= htmlspecialchars($data['currency'],ENT_QUOTES,'UTF-8') ?></span></div></div><label class="label" for="field">Card details</label><div id="field"></div><div id="error" class="error" role="alert" aria-live="polite"></div><button id="pay" type="button" disabled><span class="spinner"></span><span id="button-text">Pay <?= htmlspecialchars($data['currency'].' '.number_format((float)$data['amount'],2),ENT_QUOTES,'UTF-8') ?></span></button><p class="help">Your card details are securely processed by Revolut and never pass through WHMCS.</p></section></main>
+<script src="<?= $sdk ?>"></script><script>
+(function(){'use strict';const pay=document.getElementById('pay'),err=document.getElementById('error'),txt=document.getElementById('button-text'),target=document.getElementById('field');let busy=false,valid=false,field;
+function message(text){err.textContent=text||'';err.classList.toggle('show',!!text)}
+function setBusy(on){busy=on;pay.disabled=on||!valid;pay.classList.toggle('processing',on);txt.textContent=on?'Processing payment…':<?= json_encode('Pay '.$data['currency'].' '.number_format((float)$data['amount'],2)) ?>}
+function customerMessage(e){const code=String((e&&e.type)||(e&&e.name)||'');if(code.indexOf('declin')>=0)return 'Your card was declined. Please try another card or contact your bank.';if(code.indexOf('cancel')>=0)return 'Payment was cancelled. You can try again when ready.';return (e&&e.message&&String(e.message).length<180)?e.message:'We could not complete the payment. Please check your details and try again.'}
+if(typeof RevolutCheckout!=='function'){message('The secure payment form could not load. Please refresh the page.');return}
+RevolutCheckout(<?= json_encode($data['orderToken']) ?>,<?= json_encode($environment) ?>).then(function(instance){field=instance.createCardField({target:target,theme:'light',showLoadingIndicator:true,savePaymentMethodFor:'merchant',name:<?= json_encode($data['name']) ?>,email:<?= json_encode($data['email']) ?>,phone:<?= json_encode($data['phone']) ?>,billingAddress:<?= json_encode($data['billingAddress']) ?>,styles:{default:{fontSize:'16px',color:'#17212b',fontFamily:'system-ui, sans-serif'},focused:{color:'#101828'},invalid:{color:'#b42318'}},classes:{default:'field-default',focused:'field-focused',invalid:'field-invalid',completed:'field-completed'},onStatusChange:function(s){valid=!!s.completed&&!s.invalid;pay.disabled=busy||!valid},onValidation:function(errors){if(errors&&errors.length){message(errors[0].message||'Please check your card details.')}else{message('')}},onSuccess:function(){setBusy(true);txt.textContent='Payment received — returning…';window.location.replace(<?= json_encode($complete) ?>)},onCancel:function(){setBusy(false);message('Payment was cancelled. You can try again when ready.')},onError:function(e){setBusy(false);message(customerMessage(e))}});pay.addEventListener('click',function(){if(busy||!valid)return;message('');setBusy(true);try{field.submit()}catch(e){setBusy(false);message(customerMessage(e))}})}).catch(function(){message('The secure payment form could not be started. Please refresh the page or use another payment method.')});
+})();</script></body></html>

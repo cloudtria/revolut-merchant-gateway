@@ -1,142 +1,80 @@
 <?php
-namespace Cloudtria\WHMCS\Revolut;
 
-class RevolutException extends \RuntimeException
+final class RevolutClient
 {
-    private $response;
-    private $statusCode;
-
-    public function __construct($message, $statusCode = 0, array $response = [])
-    {
-        parent::__construct($message, (int) $statusCode);
-        $this->statusCode = (int) $statusCode;
-        $this->response = $response;
-    }
-
-    public function getResponse() { return $this->response; }
-    public function getStatusCode() { return $this->statusCode; }
-}
-
-class RevolutClient
-{
+    private $baseUrl;
     private $secretKey;
     private $apiVersion;
-    private $baseUrl;
-    private $debug;
 
-    public function __construct(array $config)
+    public function __construct(array $params)
     {
-        $this->secretKey = trim((string) ($config['secretKey'] ?? ''));
-        $this->apiVersion = trim((string) ($config['apiVersion'] ?? '2026-08-17'));
-        $environment = (string) ($config['environment'] ?? 'sandbox');
-        $this->baseUrl = $environment === 'production'
+        $this->baseUrl = ($params['environment'] ?? 'sandbox') === 'production'
             ? 'https://merchant.revolut.com'
             : 'https://sandbox-merchant.revolut.com';
-        $this->debug = !empty($config['debug']);
-
+        $this->secretKey = trim((string) ($params['secretKey'] ?? ''));
+        $this->apiVersion = trim((string) ($params['apiVersion'] ?? '2026-08-17'));
         if ($this->secretKey === '') {
-            throw new RevolutException('Revolut secret key is not configured.');
+            throw new RuntimeException('The Revolut secret key is not configured.');
         }
     }
 
-    public function createCustomer(array $payload)
+    public function get($path)
     {
-        return $this->request('POST', '/api/customers', $payload);
+        return $this->request('GET', $path);
     }
 
-    public function getCustomer($customerId)
+    public function post($path, array $body, $idempotencyKey = null)
     {
-        return $this->request('GET', '/api/customers/' . rawurlencode($customerId));
+        return $this->request('POST', $path, $body, $idempotencyKey);
     }
 
-    public function getCustomerPaymentMethods($customerId)
+    private function request($method, $path, $body = null, $idempotencyKey = null)
     {
-        return $this->request('GET', '/api/customers/' . rawurlencode($customerId) . '/payment-methods');
-    }
-
-    public function createOrder(array $payload, $idempotencyKey = null)
-    {
-        return $this->request('POST', '/api/orders', $payload, $idempotencyKey);
-    }
-
-    public function getOrder($orderId)
-    {
-        return $this->request('GET', '/api/orders/' . rawurlencode($orderId));
-    }
-
-    public function payOrder($orderId, array $payload, $idempotencyKey = null)
-    {
-        return $this->request('POST', '/api/orders/' . rawurlencode($orderId) . '/payments', $payload, $idempotencyKey);
-    }
-
-    public function getPayment($paymentId)
-    {
-        return $this->request('GET', '/api/payments/' . rawurlencode($paymentId));
-    }
-
-    public function refundOrder($orderId, array $payload, $idempotencyKey = null)
-    {
-        return $this->request('POST', '/api/orders/' . rawurlencode($orderId) . '/refund', $payload, $idempotencyKey);
-    }
-
-    public function createWebhook(array $payload, $idempotencyKey = null)
-    {
-        return $this->request('POST', '/api/webhooks', $payload, $idempotencyKey);
-    }
-
-    private function request($method, $path, array $payload = null, $idempotencyKey = null)
-    {
-        $url = $this->baseUrl . $path;
         $headers = [
             'Authorization: Bearer ' . $this->secretKey,
-            'Revolut-Api-Version: ' . $this->apiVersion,
             'Accept: application/json',
+            'Content-Type: application/json',
+            'Revolut-Api-Version: ' . $this->apiVersion,
         ];
-
-        if ($payload !== null) {
-            $headers[] = 'Content-Type: application/json';
-        }
         if ($idempotencyKey) {
             $headers[] = 'Idempotency-Key: ' . $idempotencyKey;
         }
-
-        $ch = curl_init($url);
+        $ch = curl_init($this->baseUrl . $path);
         curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_CUSTOMREQUEST => strtoupper($method),
+            CURLOPT_CUSTOMREQUEST => $method,
             CURLOPT_HTTPHEADER => $headers,
+            CURLOPT_RETURNTRANSFER => true,
             CURLOPT_CONNECTTIMEOUT => 10,
-            CURLOPT_TIMEOUT => 40,
-            CURLOPT_SSL_VERIFYPEER => true,
-            CURLOPT_SSL_VERIFYHOST => 2,
+            CURLOPT_TIMEOUT => 30,
         ]);
-        if ($payload !== null) {
-            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload, JSON_UNESCAPED_SLASHES));
+        if ($body !== null) {
+            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($body, JSON_UNESCAPED_SLASHES));
         }
-
         $raw = curl_exec($ch);
-        $errno = curl_errno($ch);
-        $error = curl_error($ch);
         $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $error = curl_error($ch);
         curl_close($ch);
-
-        if ($errno) {
-            throw new RevolutException('Revolut API transport error: ' . $error, 0, []);
+        if ($raw === false) {
+            throw new RuntimeException('Unable to reach Revolut: ' . $error);
         }
-
-        $decoded = [];
-        if ($raw !== '' && $raw !== false) {
-            $decoded = json_decode($raw, true);
-            if (!is_array($decoded)) {
-                $decoded = ['raw' => $raw];
-            }
+        $data = json_decode($raw, true);
+        if (!is_array($data)) {
+            $data = ['raw' => $raw];
         }
-
         if ($status < 200 || $status >= 300) {
-            $message = isset($decoded['message']) ? $decoded['message'] : ('Revolut API HTTP ' . $status);
-            throw new RevolutException($message, $status, $decoded);
+            $message = $data['message'] ?? $data['code'] ?? ('HTTP ' . $status);
+            throw new RevolutApiException('Revolut rejected the request: ' . $message, $status, $data);
         }
+        return $data;
+    }
+}
 
-        return $decoded;
+final class RevolutApiException extends RuntimeException
+{
+    public $response;
+    public function __construct($message, $status, array $response)
+    {
+        parent::__construct($message, (int) $status);
+        $this->response = $response;
     }
 }

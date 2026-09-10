@@ -1,167 +1,103 @@
 <?php
-namespace Cloudtria\WHMCS\Revolut;
 
 use WHMCS\Database\Capsule;
 
-class Helpers
+function revolut_require_library()
 {
-    public static function ensureSchema()
-    {
-        if (!Capsule::schema()->hasTable('mod_revolut_customers')) {
-            Capsule::schema()->create('mod_revolut_customers', function ($table) {
-                $table->increments('id');
-                $table->unsignedInteger('whmcs_client_id')->unique();
-                $table->string('revolut_customer_id', 64)->unique();
-                $table->timestamps();
-            });
+    require_once __DIR__ . '/RevolutClient.php';
+    require_once __DIR__ . '/Token.php';
+}
+
+function revolut_ensure_tables()
+{
+    $schema = Capsule::schema();
+    if (!$schema->hasTable('mod_revolut_customers')) {
+        $schema->create('mod_revolut_customers', function ($table) {
+            $table->integer('client_id')->unsigned()->primary();
+            $table->string('customer_id', 64)->unique();
+            $table->timestamps();
+        });
+    }
+    if (!$schema->hasTable('mod_revolut_sessions')) {
+        $schema->create('mod_revolut_sessions', function ($table) {
+            $table->string('token', 64)->primary();
+            $table->integer('client_id')->unsigned();
+            $table->integer('invoice_id')->unsigned()->nullable();
+            $table->integer('pay_method_id')->unsigned()->nullable();
+            $table->string('order_id', 64);
+            $table->string('return_url', 1024);
+            $table->text('customer_json');
+            $table->timestamp('expires_at');
+            $table->timestamps();
+        });
+    }
+    if (!$schema->hasTable('mod_revolut_transactions')) {
+        $schema->create('mod_revolut_transactions', function ($table) {
+            $table->string('payment_id', 64)->primary();
+            $table->string('order_id', 64)->index();
+            $table->integer('invoice_id')->unsigned()->nullable()->index();
+            $table->timestamps();
+        });
+    }
+}
+
+function revolut_minor_units($amount, $currency)
+{
+    $zero = ['BIF','CLP','DJF','GNF','ISK','JPY','KMF','KRW','PYG','RWF','UGX','UYI','VND','VUV','XAF','XOF','XPF'];
+    $three = ['BHD','IQD','JOD','KWD','LYD','OMR','TND'];
+    $power = in_array(strtoupper($currency), $zero, true) ? 0 : (in_array(strtoupper($currency), $three, true) ? 3 : 2);
+    return (int) round(((float) $amount) * (10 ** $power));
+}
+
+function revolut_major_units($amount, $currency)
+{
+    return revolut_minor_units(1, $currency) ? ((float) $amount / revolut_minor_units(1, $currency)) : (float) $amount;
+}
+
+function revolut_payment_fee(array $payment, $invoiceCurrency)
+{
+    $total = 0;
+    foreach (($payment['fees'] ?? []) as $fee) {
+        if (strtoupper((string) ($fee['currency'] ?? '')) === strtoupper($invoiceCurrency)) {
+            $total += (int) ($fee['amount'] ?? 0);
         }
     }
+    return revolut_major_units($total, $invoiceCurrency);
+}
 
-    public static function getOrCreateCustomer(RevolutClient $client, $whmcsClientId, array $clientDetails)
-    {
-        self::ensureSchema();
-        $row = Capsule::table('mod_revolut_customers')->where('whmcs_client_id', (int) $whmcsClientId)->first();
-        if ($row && !empty($row->revolut_customer_id)) {
-            return (string) $row->revolut_customer_id;
-        }
-
-        $payload = [
-            'email' => (string) $clientDetails['email'],
+function revolut_safe_error($exception)
+{
+    if ($exception instanceof RevolutApiException) {
+        $code = $exception->response['code'] ?? '';
+        $map = [
+            'insufficient_funds' => 'The card has insufficient funds.',
+            'card_declined' => 'The card was declined. Please use another card or contact your bank.',
+            'expired_card' => 'The card has expired. Please use another card.',
+            'authentication_failed' => 'Card verification failed. Please try again.',
         ];
-        $fullName = trim(((string) ($clientDetails['firstname'] ?? '')) . ' ' . ((string) ($clientDetails['lastname'] ?? '')));
-        if ($fullName !== '') $payload['full_name'] = $fullName;
-        $phone = trim((string) ($clientDetails['phonenumber'] ?? ''));
-        if ($phone !== '') $payload['phone'] = $phone;
-
-        $customer = $client->createCustomer($payload);
-        if (empty($customer['id'])) {
-            throw new RevolutException('Revolut did not return a customer ID.');
-        }
-
-        Capsule::table('mod_revolut_customers')->updateOrInsert(
-            ['whmcs_client_id' => (int) $whmcsClientId],
-            [
-                'revolut_customer_id' => $customer['id'],
-                'created_at' => date('Y-m-d H:i:s'),
-                'updated_at' => date('Y-m-d H:i:s'),
-            ]
-        );
-        return (string) $customer['id'];
+        if (isset($map[$code])) return $map[$code];
     }
+    return 'We could not complete the payment. Please try again or use another payment method.';
+}
 
-    public static function tokenEncode($customerId, $paymentMethodId)
-    {
-        return 'rv1:' . $customerId . ':' . $paymentMethodId;
-    }
+function revolut_redirect_page($url, $success, $message = '')
+{
+    $safeUrl = htmlspecialchars($url, ENT_QUOTES, 'UTF-8');
+    $safeMessage = htmlspecialchars($message ?: ($success ? 'Payment received. Returning to your invoice…' : 'Returning to your invoice…'), ENT_QUOTES, 'UTF-8');
+    $jsonUrl = json_encode($url, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+    header('Content-Type: text/html; charset=utf-8');
+    header('Cache-Control: no-store');
+    echo '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">';
+    echo '<meta http-equiv="refresh" content="2;url=' . $safeUrl . '"><title>Payment</title></head>';
+    echo '<body style="font-family:system-ui,sans-serif;text-align:center;padding:3rem;color:#182230"><p>' . $safeMessage . '</p>';
+    echo '<p><a href="' . $safeUrl . '">Continue to invoice</a></p><script>try{window.top.location.replace(' . $jsonUrl . ')}catch(e){window.location.replace(' . $jsonUrl . ')}</script></body></html>';
+    exit;
+}
 
-    public static function tokenDecode($token)
-    {
-        $parts = explode(':', (string) $token, 3);
-        if (count($parts) !== 3 || $parts[0] !== 'rv1' || !$parts[1] || !$parts[2]) {
-            throw new \InvalidArgumentException('Invalid Revolut remote token.');
-        }
-        return ['customer_id' => $parts[1], 'payment_method_id' => $parts[2]];
+function revolut_find_captured_payment(array $order)
+{
+    foreach (array_reverse($order['payments'] ?? []) as $payment) {
+        if (in_array($payment['state'] ?? '', ['captured', 'completed'], true)) return $payment;
     }
-
-    public static function minorUnits($amount, $currency)
-    {
-        $currency = strtoupper((string) $currency);
-        $zero = ['BIF','CLP','DJF','GNF','ISK','JPY','KMF','KRW','PYG','RWF','UGX','UYI','VND','VUV','XAF','XOF','XPF'];
-        $three = ['BHD','IQD','JOD','KWD','LYD','OMR','TND'];
-        $exp = in_array($currency, $zero, true) ? 0 : (in_array($currency, $three, true) ? 3 : 2);
-        return (int) round(((float) $amount) * (10 ** $exp));
-    }
-
-    public static function majorUnits($minor, $currency)
-    {
-        $currency = strtoupper((string) $currency);
-        $zero = ['BIF','CLP','DJF','GNF','ISK','JPY','KMF','KRW','PYG','RWF','UGX','UYI','VND','VUV','XAF','XOF','XPF'];
-        $three = ['BHD','IQD','JOD','KWD','LYD','OMR','TND'];
-        $exp = in_array($currency, $zero, true) ? 0 : (in_array($currency, $three, true) ? 3 : 2);
-        return ((float) $minor) / (10 ** $exp);
-    }
-
-    public static function signContext(array $payload, $secret)
-    {
-        $json = json_encode($payload, JSON_UNESCAPED_SLASHES);
-        $body = rtrim(strtr(base64_encode($json), '+/', '-_'), '=');
-        $sig = hash_hmac('sha256', $body, hash('sha256', (string) $secret, true));
-        return $body . '.' . $sig;
-    }
-
-    public static function verifyContext($value, $secret, $maxAge = 900)
-    {
-        $parts = explode('.', (string) $value, 2);
-        if (count($parts) !== 2) throw new \RuntimeException('Malformed context.');
-        list($body, $sig) = $parts;
-        $expected = hash_hmac('sha256', $body, hash('sha256', (string) $secret, true));
-        if (!hash_equals($expected, $sig)) throw new \RuntimeException('Invalid context signature.');
-        $padded = strtr($body, '-_', '+/');
-        $pad = strlen($padded) % 4;
-        if ($pad) $padded .= str_repeat('=', 4 - $pad);
-        $payload = json_decode(base64_decode($padded), true);
-        if (!is_array($payload)) throw new \RuntimeException('Invalid context payload.');
-        if (empty($payload['ts']) || abs(time() - (int) $payload['ts']) > $maxAge) throw new \RuntimeException('Expired context.');
-        return $payload;
-    }
-
-    public static function findSuccessfulPayment(array $order)
-    {
-        $payments = isset($order['payments']) && is_array($order['payments']) ? $order['payments'] : [];
-        $acceptable = ['captured','completed','authorised','authorisation_passed'];
-        for ($i = count($payments) - 1; $i >= 0; $i--) {
-            if (in_array((string) ($payments[$i]['state'] ?? ''), $acceptable, true)) return $payments[$i];
-        }
-        return null;
-    }
-
-    public static function findPaymentMethod(RevolutClient $client, $customerId, $paymentMethodId = null)
-    {
-        $response = $client->getCustomerPaymentMethods($customerId);
-        $methods = isset($response['payment_methods']) && is_array($response['payment_methods']) ? $response['payment_methods'] : [];
-        if ($paymentMethodId) {
-            foreach ($methods as $method) {
-                if (($method['id'] ?? null) === $paymentMethodId) return $method;
-            }
-        }
-        for ($i = count($methods) - 1; $i >= 0; $i--) {
-            if (($methods[$i]['type'] ?? '') === 'card' && ($methods[$i]['saved_for'] ?? '') === 'merchant') return $methods[$i];
-        }
-        return null;
-    }
-
-    public static function cardType($brand)
-    {
-        $b = strtolower((string) $brand);
-        if (strpos($b, 'visa') !== false) return 'Visa';
-        if (strpos($b, 'mastercard') !== false) return 'MasterCard';
-        if (strpos($b, 'amex') !== false || strpos($b, 'american_express') !== false) return 'American Express';
-        if (strpos($b, 'discover') !== false) return 'Discover';
-        return ucfirst(str_replace('_', ' ', $b ?: 'Card'));
-    }
-
-    public static function expiryMmyy(array $method)
-    {
-        $m = isset($method['expiry_month']) ? (int) $method['expiry_month'] : 0;
-        $y = isset($method['expiry_year']) ? (int) $method['expiry_year'] : 0;
-        if (!$m || !$y) return '';
-        return sprintf('%02d%02d', $m, $y % 100);
-    }
-
-    public static function sanitize(array $data)
-    {
-        $blocked = ['authorization','secret','secret_key','webhook_secret','cvv','cvc','card_number','pan'];
-        $walk = function ($value) use (&$walk, $blocked) {
-            if (!is_array($value)) return $value;
-            $out = [];
-            foreach ($value as $k => $v) {
-                $lk = strtolower((string) $k);
-                $redact = false;
-                foreach ($blocked as $needle) if (strpos($lk, $needle) !== false) $redact = true;
-                $out[$k] = $redact ? '[REDACTED]' : $walk($v);
-            }
-            return $out;
-        };
-        return $walk($data);
-    }
+    return null;
 }

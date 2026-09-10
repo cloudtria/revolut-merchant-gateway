@@ -1,124 +1,155 @@
 <?php
-use Cloudtria\WHMCS\Revolut\Helpers;
-use Cloudtria\WHMCS\Revolut\RevolutClient;
-use Cloudtria\WHMCS\Revolut\RevolutException;
 
 if (!defined('WHMCS')) die('This file cannot be accessed directly');
-require_once __DIR__ . '/revolut/lib/RevolutClient.php';
+
+use WHMCS\Billing\Currency;
+use WHMCS\Billing\Payment\Transaction\Information;
+use WHMCS\Carbon;
+use WHMCS\Database\Capsule;
+
 require_once __DIR__ . '/revolut/lib/Helpers.php';
+revolut_require_library();
 
 function revolut_MetaData()
 {
-    return ['DisplayName' => 'Revolut Merchant', 'APIVersion' => '1.1'];
+    return ['DisplayName' => 'Revolut Merchant Gateway', 'APIVersion' => '1.1'];
 }
 
 function revolut_config()
 {
     return [
         'FriendlyName' => ['Type' => 'System', 'Value' => 'Revolut'],
-        'secretKey' => ['FriendlyName' => 'Secret Key', 'Type' => 'password', 'Size' => '80', 'Description' => 'Merchant API secret key'],
-        'publicKey' => ['FriendlyName' => 'Public Key', 'Type' => 'password', 'Size' => '80', 'Description' => 'Merchant public key (reserved for future Revolut Pay/UI extensions)'],
+        'secretKey' => ['FriendlyName' => 'Secret Key', 'Type' => 'password', 'Size' => '80'],
+        'publicKey' => ['FriendlyName' => 'Public Key', 'Type' => 'password', 'Size' => '80', 'Description' => 'Reserved for supported Revolut checkout features.'],
         'environment' => ['FriendlyName' => 'Environment', 'Type' => 'dropdown', 'Options' => ['sandbox' => 'Sandbox', 'production' => 'Production'], 'Default' => 'sandbox'],
         'apiVersion' => ['FriendlyName' => 'API Version', 'Type' => 'text', 'Default' => '2026-08-17'],
         'webhookSecret' => ['FriendlyName' => 'Webhook Signing Secret', 'Type' => 'password', 'Size' => '80'],
-        'sdkUrl' => ['FriendlyName' => 'Checkout SDK URL', 'Type' => 'text', 'Default' => 'https://merchant.revolut.com/embed.js', 'Description' => 'Revolut Checkout embed script URL'],
-        'debug' => ['FriendlyName' => 'Debug Logging', 'Type' => 'yesno', 'Description' => 'Log sanitised API responses in Gateway Log'],
+        'checkoutSdkUrl' => ['FriendlyName' => 'Checkout SDK URL', 'Type' => 'text', 'Default' => 'https://merchant.revolut.com/embed.js'],
+        'debug' => ['FriendlyName' => 'Debug Logging', 'Type' => 'yesno', 'Description' => 'Log non-sensitive Revolut responses while testing.'],
     ];
 }
 
-function revolut_nolocalcc() {}
+function revolut_get_or_create_customer(RevolutClient $client, array $params)
+{
+    revolut_ensure_tables();
+    $clientId = (int) $params['clientdetails']['id'];
+    $row = Capsule::table('mod_revolut_customers')->where('client_id', $clientId)->first();
+    if ($row) return $row->customer_id;
+    $customer = $client->post('/api/customers', [
+        'email' => (string) $params['clientdetails']['email'],
+        'full_name' => trim(($params['clientdetails']['firstname'] ?? '') . ' ' . ($params['clientdetails']['lastname'] ?? '')),
+    ]);
+    Capsule::table('mod_revolut_customers')->insert([
+        'client_id' => $clientId, 'customer_id' => $customer['id'],
+        'created_at' => date('Y-m-d H:i:s'), 'updated_at' => date('Y-m-d H:i:s'),
+    ]);
+    return $customer['id'];
+}
+
+function revolut_create_order(RevolutClient $client, array $params, $customerId)
+{
+    $invoiceId = isset($params['invoiceid']) ? (int) $params['invoiceid'] : 0;
+    return $client->post('/api/orders', [
+        'amount' => revolut_minor_units($params['amount'] ?? 0, $params['currency']),
+        'currency' => strtoupper($params['currency']),
+        'capture_mode' => 'automatic',
+        'customer' => ['id' => $customerId],
+        'description' => $invoiceId ? 'WHMCS invoice #' . $invoiceId : 'Save payment method',
+        'merchant_order_data' => ['reference' => $invoiceId ? 'WHMCS-INV-' . $invoiceId : 'WHMCS-CARD-' . (int) $params['clientdetails']['id']],
+        'metadata' => ['whmcs_invoice_id' => (string) $invoiceId, 'whmcs_client_id' => (string) (int) $params['clientdetails']['id']],
+    ], 'whmcs-order-' . ($invoiceId ?: ('card-' . (int) $params['clientdetails']['id'])) . '-' . bin2hex(random_bytes(8)));
+}
 
 function revolut_remoteinput($params)
 {
-    $payload = [
-        'ts' => time(),
-        'action' => ((float) ($params['amount'] ?? 0) > 0) ? 'payment' : 'create',
-        'client_id' => (int) ($params['clientdetails']['id'] ?? 0),
-        'invoice_id' => (int) ($params['invoiceid'] ?? 0),
-        'amount' => (string) ($params['amount'] ?? '0'),
-        'currency' => strtoupper((string) ($params['currency'] ?? '')),
-        'firstname' => (string) ($params['clientdetails']['firstname'] ?? ''),
-        'lastname' => (string) ($params['clientdetails']['lastname'] ?? ''),
-        'email' => (string) ($params['clientdetails']['email'] ?? ''),
-        'phone' => (string) ($params['clientdetails']['phonenumber'] ?? ''),
-        'address1' => (string) ($params['clientdetails']['address1'] ?? ''),
-        'address2' => (string) ($params['clientdetails']['address2'] ?? ''),
-        'city' => (string) ($params['clientdetails']['city'] ?? ''),
-        'state' => (string) ($params['clientdetails']['state'] ?? ''),
-        'postcode' => (string) ($params['clientdetails']['postcode'] ?? ''),
-        'country' => strtoupper((string) ($params['clientdetails']['country'] ?? '')),
-    ];
-    $context = Helpers::signContext($payload, $params['secretKey']);
-    $action = rtrim($params['systemurl'], '/') . '/modules/gateways/revolut/checkout.php';
-    return '<form method="post" action="' . htmlspecialchars($action, ENT_QUOTES, 'UTF-8') . '">' .
-        '<input type="hidden" name="context" value="' . htmlspecialchars($context, ENT_QUOTES, 'UTF-8') . '">' .
-        '<noscript><input type="submit" value="Continue to payment"></noscript></form>';
+    try {
+        $client = new RevolutClient($params);
+        $customerId = revolut_get_or_create_customer($client, $params);
+        $order = revolut_create_order($client, $params, $customerId);
+        $token = bin2hex(random_bytes(32));
+        $customer = [
+            'name' => trim(($params['clientdetails']['firstname'] ?? '') . ' ' . ($params['clientdetails']['lastname'] ?? '')),
+            'email' => $params['clientdetails']['email'] ?? '', 'phone' => $params['clientdetails']['phonenumber'] ?? '',
+            'billingAddress' => ['countryCode' => strtoupper($params['clientdetails']['country'] ?? ''), 'region' => $params['clientdetails']['state'] ?? '', 'city' => $params['clientdetails']['city'] ?? '', 'postcode' => $params['clientdetails']['postcode'] ?? '', 'streetLine1' => $params['clientdetails']['address1'] ?? '', 'streetLine2' => $params['clientdetails']['address2'] ?? ''],
+            'orderToken' => $order['token'], 'amount' => $params['amount'] ?? 0, 'currency' => strtoupper($params['currency']),
+        ];
+        Capsule::table('mod_revolut_sessions')->insert([
+            'token' => $token, 'client_id' => (int) $params['clientdetails']['id'],
+            'invoice_id' => !empty($params['invoiceid']) ? (int) $params['invoiceid'] : null,
+            'pay_method_id' => !empty($params['paymethodid']) ? (int) $params['paymethodid'] : null,
+            'order_id' => $order['id'], 'return_url' => $params['returnurl'] ?: ($params['systemurl'] . 'viewinvoice.php?id=' . (int) ($params['invoiceid'] ?? 0)),
+            'customer_json' => json_encode($customer), 'expires_at' => date('Y-m-d H:i:s', time() + 3600),
+            'created_at' => date('Y-m-d H:i:s'), 'updated_at' => date('Y-m-d H:i:s'),
+        ]);
+        $action = rtrim($params['systemurl'], '/') . '/modules/gateways/revolut/checkout.php';
+        return '<form method="post" action="' . htmlspecialchars($action, ENT_QUOTES, 'UTF-8') . '"><input type="hidden" name="session" value="' . $token . '"><noscript><button type="submit">Continue to secure payment</button></noscript></form>';
+    } catch (Throwable $e) {
+        logTransaction('Revolut', ['stage' => 'remoteinput', 'error' => $e->getMessage()], 'Error');
+        return '<div class="alert alert-danger">Unable to initialise the secure payment form. Please refresh the page or choose another payment method.</div>';
+    }
 }
 
 function revolut_remoteupdate($params)
 {
-    return '<div class="alert alert-info">Revolut saved cards are replaced rather than edited. Please add a new payment method, set it as default, then remove the old one.</div>';
+    return revolut_remoteinput($params);
 }
 
 function revolut_capture($params)
 {
     try {
-        if (empty($params['gatewayid'])) throw new \RuntimeException('No saved Revolut payment method is available.');
-        $token = Helpers::tokenDecode($params['gatewayid']);
+        revolut_ensure_tables();
+        $saved = RevolutToken::decode($params['gatewayid'] ?? '');
         $client = new RevolutClient($params);
-        $minor = Helpers::minorUnits($params['amount'], $params['currency']);
-        $reference = 'whmcs-invoice-' . (int) $params['invoiceid'];
-        $order = $client->createOrder([
-            'amount' => $minor,
-            'currency' => strtoupper($params['currency']),
-            'customer' => ['id' => $token['customer_id']],
-            'capture_mode' => 'automatic',
-            'description' => 'WHMCS invoice #' . (int) $params['invoiceid'],
-            'merchant_order_data' => ['reference' => $reference, 'url' => rtrim($params['systemurl'], '/') . '/viewinvoice.php?id=' . (int) $params['invoiceid']],
-            'metadata' => ['whmcs_invoice_id' => (string) ((int) $params['invoiceid'])],
-        ], 'whmcs-order-invoice-' . (int) $params['invoiceid'] . '-' . sha1($params['gatewayid'] . '|' . $minor));
-
-        $payment = $client->payOrder($order['id'], [
-            'saved_payment_method' => [
-                'type' => 'card',
-                'id' => $token['payment_method_id'],
-                'initiator' => 'merchant',
-            ],
-        ], 'whmcs-pay-invoice-' . (int) $params['invoiceid'] . '-' . sha1($params['gatewayid'] . '|' . $minor));
-
-        $state = (string) ($payment['state'] ?? '');
-        if (in_array($state, ['captured','completed'], true)) {
-            return ['status' => 'success', 'transid' => $payment['id'], 'rawdata' => Helpers::sanitize($payment)];
+        $order = revolut_create_order($client, $params, $saved['customer_id']);
+        $payment = $client->post('/api/orders/' . rawurlencode($order['id']) . '/payments', [
+            'saved_payment_method' => ['type' => 'card', 'id' => $saved['payment_method_id'], 'initiator' => 'merchant'],
+        ], 'whmcs-payment-' . (int) $params['invoiceid']);
+        Capsule::table('mod_revolut_transactions')->updateOrInsert(['payment_id' => $payment['id']], ['order_id' => $order['id'], 'invoice_id' => (int) $params['invoiceid'], 'updated_at' => date('Y-m-d H:i:s'), 'created_at' => date('Y-m-d H:i:s')]);
+        $state = $payment['state'] ?? '';
+        if (in_array($state, ['captured', 'completed'], true)) {
+            return ['status' => 'success', 'transid' => $payment['id'], 'fee' => revolut_payment_fee($payment, $params['currency']), 'rawdata' => $payment];
         }
-        if (in_array($state, ['pending','authorisation_started','authorisation_passed','authorised','capture_started','completing'], true)) {
-            return ['status' => 'pending', 'transid' => $payment['id'] ?? $order['id'], 'rawdata' => Helpers::sanitize($payment)];
+        if (in_array($state, ['declined', 'failed', 'cancelled'], true)) {
+            return ['status' => 'declined', 'declinereason' => $payment['decline_reason'] ?? 'Payment declined', 'rawdata' => $payment];
         }
-        return ['status' => 'declined', 'declinereason' => $payment['decline_reason'] ?? ('Revolut payment state: ' . $state), 'rawdata' => Helpers::sanitize($payment)];
-    } catch (RevolutException $e) {
-        return ['status' => 'declined', 'declinereason' => $e->getMessage(), 'rawdata' => Helpers::sanitize($e->getResponse())];
-    } catch (\Throwable $e) {
-        return ['status' => 'error', 'rawdata' => ['message' => $e->getMessage()]];
+        return ['status' => 'pending', 'transid' => $payment['id'], 'rawdata' => $payment];
+    } catch (Throwable $e) {
+        return ['status' => 'error', 'rawdata' => ['error' => $e->getMessage()]];
     }
 }
 
 function revolut_refund($params)
 {
     try {
+        revolut_ensure_tables();
+        $map = Capsule::table('mod_revolut_transactions')->where('payment_id', $params['transid'])->first();
+        if (!$map) throw new RuntimeException('The Revolut order mapping was not found for this transaction.');
         $client = new RevolutClient($params);
-        $payment = $client->getPayment($params['transid']);
-        if (empty($payment['order_id'])) throw new \RuntimeException('Could not resolve the Revolut order for this transaction.');
-        $currency = strtoupper($params['currency']);
-        $minor = Helpers::minorUnits($params['amount'], $currency);
-        $refund = $client->refundOrder($payment['order_id'], [
-            'amount' => $minor,
-            'currency' => $currency,
+        $refund = $client->post('/api/orders/' . rawurlencode($map->order_id) . '/refund', [
+            'amount' => revolut_minor_units($params['amount'], $params['currency']), 'currency' => strtoupper($params['currency']),
             'description' => 'WHMCS refund for transaction ' . $params['transid'],
-            'merchant_order_data' => ['reference' => 'whmcs-refund-' . sha1($params['transid'] . '|' . $minor)],
-        ], 'whmcs-refund-' . sha1($params['transid'] . '|' . $minor));
-        return ['status' => 'success', 'transid' => $refund['id'] ?? '', 'rawdata' => Helpers::sanitize($refund)];
-    } catch (RevolutException $e) {
-        return ['status' => 'error', 'rawdata' => Helpers::sanitize($e->getResponse()) + ['message' => $e->getMessage()]];
-    } catch (\Throwable $e) {
-        return ['status' => 'error', 'rawdata' => ['message' => $e->getMessage()]];
+        ], 'whmcs-refund-' . $params['transid'] . '-' . revolut_minor_units($params['amount'], $params['currency']));
+        return ['status' => 'success', 'transid' => $refund['id'], 'rawdata' => $refund];
+    } catch (Throwable $e) {
+        return ['status' => 'error', 'rawdata' => ['error' => $e->getMessage()]];
     }
+}
+
+function revolut_TransactionInformation(array $params = []): Information
+{
+    revolut_ensure_tables();
+    $paymentId = (string) ($params['transactionId'] ?? '');
+    $map = Capsule::table('mod_revolut_transactions')->where('payment_id', $paymentId)->first();
+    if (!$map) throw new RuntimeException('No Revolut order mapping exists for this transaction.');
+    $order = (new RevolutClient($params))->get('/api/orders/' . rawurlencode($map->order_id));
+    $payment = null;
+    foreach (($order['payments'] ?? []) as $candidate) if (($candidate['id'] ?? '') === $paymentId) $payment = $candidate;
+    if (!$payment) throw new RuntimeException('The transaction was not returned by Revolut.');
+    $currencyCode = strtoupper($payment['currency'] ?? $order['currency'] ?? '');
+    $currency = Currency::where('code', $currencyCode)->first();
+    $info = (new Information())->setTransactionId($paymentId)->setAmount(revolut_major_units($payment['amount'] ?? 0, $currencyCode), $currency)->setType('charge')->setStatus($payment['state'] ?? 'unknown')->setDescription($order['description'] ?? ('Revolut order ' . $map->order_id));
+    $fee = revolut_payment_fee($payment, $currencyCode);
+    if ($fee) $info->setFee($fee, $currency);
+    if (!empty($payment['created_at'])) $info->setCreated(Carbon::parse($payment['created_at']));
+    return $info->setAdditionalDatum('revolutOrderId', $map->order_id)->setAdditionalDatum('paymentMethod', $payment['payment_method']['type'] ?? 'unknown')->setAdditionalDatum('cardLastFour', $payment['payment_method']['card_last_four'] ?? '');
 }
