@@ -74,6 +74,23 @@ https://billing.example.com/modules/gateways/revolut/webhook.php
 
 Subscribe to `ORDER_COMPLETED`, `ORDER_FAILED`, `ORDER_CANCELLED`, `ORDER_PAYMENT_FAILED`, and `ORDER_PAYMENT_DECLINED`.
 
+```Example Webhook Subscription
+curl -sS -X POST "https://merchant.revolut.com/api/webhooks" \
+  -H "Authorization: Bearer ${REVOLUT_SECRET_KEY}" \
+  -H "Revolut-Api-Version: 2026-08-17" \
+  -H "Content-Type: application/json" \
+  -d '{                                               
+    "url": "https://$WHMCS_URL/modules/gateways/revolut/webhook.php",
+    "events": [                         
+      "ORDER_COMPLETED",
+      "ORDER_FAILED",
+      "ORDER_CANCELLED",
+      "ORDER_PAYMENT_DECLINED",
+      "ORDER_PAYMENT_FAILED"
+    ]
+  }' | jq
+```
+
 Copy the returned signing secret into **Webhook Signing Secret** in WHMCS. The endpoint validates Revolut's HMAC-SHA256 signature and rejects timestamps outside a five-minute tolerance.
 
 ## Billing architecture
