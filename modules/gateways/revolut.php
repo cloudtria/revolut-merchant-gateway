@@ -126,15 +126,52 @@ function revolut_refund($params)
     try {
         revolut_ensure_tables();
         $map = Capsule::table('mod_revolut_transactions')->where('payment_id', $params['transid'])->first();
-        if (!$map) throw new RuntimeException('The Revolut order mapping was not found for this transaction.');
         $client = new RevolutClient($params);
-        $refund = $client->post('/api/orders/' . rawurlencode($map->order_id) . '/refund', [
+        $orderId = $map ? (string) $map->order_id : '';
+
+        // Transactions created before mod_revolut_transactions was introduced
+        // can still be refunded by resolving their order from Revolut.
+        if ($orderId === '') {
+            $payment = $client->get('/api/payments/' . rawurlencode($params['transid']));
+            $orderId = (string) ($payment['order_id'] ?? '');
+        }
+        if ($orderId === '') throw new RuntimeException('Could not resolve the Revolut order for this transaction.');
+
+        $minorAmount = revolut_minor_units($params['amount'], $params['currency']);
+        $refund = $client->post('/api/orders/' . rawurlencode($orderId) . '/refund', [
             'amount' => revolut_minor_units($params['amount'], $params['currency']), 'currency' => strtoupper($params['currency']),
             'description' => 'WHMCS refund for transaction ' . $params['transid'],
-        ], 'whmcs-refund-' . $params['transid'] . '-' . revolut_minor_units($params['amount'], $params['currency']));
+            'merchant_order_data' => ['reference' => 'WHMCS-REFUND-' . (int) $params['invoiceid'] . '-' . $minorAmount],
+            'metadata' => ['whmcs_invoice_id' => (string) (int) $params['invoiceid'], 'original_payment_id' => (string) $params['transid']],
+        ], 'whmcs-refund-' . $params['transid'] . '-' . $minorAmount);
+
+        logTransaction('Revolut', [
+            'stage' => 'refund',
+            'invoice_id' => (int) $params['invoiceid'],
+            'payment_id' => (string) $params['transid'],
+            'order_id' => $orderId,
+            'refund_order_id' => (string) ($refund['id'] ?? ''),
+            'amount' => (string) $params['amount'],
+            'currency' => strtoupper($params['currency']),
+            'state' => (string) ($refund['state'] ?? ''),
+        ], 'Refund initiated');
+
         return ['status' => 'success', 'transid' => $refund['id'], 'rawdata' => $refund];
     } catch (Throwable $e) {
-        return ['status' => 'error', 'rawdata' => ['error' => $e->getMessage()]];
+        $errorData = [
+            'stage' => 'refund',
+            'invoice_id' => (int) ($params['invoiceid'] ?? 0),
+            'payment_id' => (string) ($params['transid'] ?? ''),
+            'amount' => (string) ($params['amount'] ?? ''),
+            'currency' => strtoupper((string) ($params['currency'] ?? '')),
+            'error' => $e->getMessage(),
+        ];
+        if ($e instanceof RevolutApiException) {
+            $errorData['http_status'] = $e->getCode();
+            $errorData['response'] = $e->response;
+        }
+        logTransaction('Revolut', $errorData, 'Refund failed');
+        return ['status' => 'error', 'rawdata' => $errorData];
     }
 }
 
