@@ -15,13 +15,29 @@ $sdk = htmlspecialchars($gateway['checkoutSdkUrl'] ?: 'https://merchant.revolut.
 $environment = ($gateway['environment'] ?? 'sandbox') === 'production' ? 'prod' : 'sandbox';
 $complete = rtrim($gateway['systemurl'], '/') . '/modules/gateways/revolut/complete.php?session=' . $token;
 $returnUrl = $session->return_url ?: (rtrim($gateway['systemurl'], '/') . '/viewinvoice.php?id=' . (int) $session->invoice_id);
-$publicKey = trim((string) ($gateway['publicKey'] ?? ''));
-$enableRevolutPay = $publicKey !== '' && !empty($gateway['enableRevolutPay']);
-$enableWallets = $publicKey !== '' && !empty($gateway['enableWallets']) && (float) ($data['amount'] ?? 0) > 0;
+$gatewaySetting = function ($name) use ($gateway) {
+    foreach ($gateway as $key => $value) if (strcasecmp((string) $key, $name) === 0) return $value;
+    return null;
+};
+$publicKey = trim((string) $gatewaySetting('publicKey'));
+$revolutPaySetting = $gatewaySetting('enableRevolutPay');
+$walletSetting = $gatewaySetting('enableWallets');
+$enableRevolutPay = $publicKey !== '' && !empty($revolutPaySetting);
+$enableWallets = $publicKey !== '' && !empty($walletSetting) && (float) ($data['amount'] ?? 0) > 0;
 $minorAmount = revolut_minor_units($data['amount'] ?? 0, $data['currency'] ?? '');
 $redirectBase = rtrim($gateway['systemurl'], '/') . '/modules/gateways/revolut/checkout.php?session=' . $token;
 $clientLogUrl = rtrim($gateway['systemurl'], '/') . '/modules/gateways/revolut/client-log.php';
 $initialStatus = (string) ($_GET['status'] ?? '');
+if (!$enableRevolutPay && !$enableWallets) {
+    logTransaction('Revolut', [
+        'stage' => 'checkout_options',
+        'invoice_id' => (int) $session->invoice_id,
+        'public_key_present' => $publicKey !== '',
+        'enable_revolut_pay' => $revolutPaySetting === null ? '(missing)' : (string) $revolutPaySetting,
+        'enable_wallets' => $walletSetting === null ? '(missing)' : (string) $walletSetting,
+        'amount_allows_wallets' => (float) ($data['amount'] ?? 0) > 0,
+    ], 'Checkout options unavailable');
+}
 ?>
 <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Secure card payment</title><style>
