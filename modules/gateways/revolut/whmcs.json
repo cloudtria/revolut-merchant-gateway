@@ -11,7 +11,7 @@
     "features": ["PCI-conscious remote card input", "Saved payment methods", "WHMCS-managed recurring capture", "Full and partial refunds", "Signed webhook reconciliation", "Configurable customer-facing references"]
   },
   "logo": {
-    "filename": "logo.svg"
+    "filename": "revolut-logo.png"
   },
   "support": {
     "homepage": "https://github.com/cloudtria/revolut-merchant-gateway",
