@@ -174,6 +174,25 @@ function revolut_refund($params)
         if ($e instanceof RevolutApiException) {
             $errorData['http_status'] = $e->getCode();
             $errorData['response'] = $e->response;
+
+            // Revolut returns 409 while a previously accepted refund using
+            // the same idempotency key is still processing. WHMCS records a
+            // refund when it is initiated, so this is an accepted retry rather
+            // than a failed refund and must not prompt another refund attempt.
+            $responseMessage = strtolower((string) ($e->response['message'] ?? ''));
+            if ($e->getCode() === 409 && strpos($responseMessage, 'unfinished refund') !== false) {
+                $pendingReference = 'pending-' . substr(hash('sha256',
+                    ($params['transid'] ?? '') . '|' . ($params['amount'] ?? '') . '|' . ($params['currency'] ?? '')
+                ), 0, 24);
+                logTransaction('Revolut', $errorData + [
+                    'refund_reference' => $pendingReference,
+                ], 'Refund already processing');
+                return [
+                    'status' => 'success',
+                    'transid' => $pendingReference,
+                    'rawdata' => $errorData,
+                ];
+            }
         }
         logTransaction('Revolut', $errorData, 'Refund failed');
         return ['status' => 'error', 'rawdata' => $errorData];
