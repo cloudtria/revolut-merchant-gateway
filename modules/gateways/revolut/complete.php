@@ -26,7 +26,7 @@ try {
     $method = $payment['payment_method'] ?? [];
     $paymentMethodId = $method['id'] ?? '';
     if ($paymentMethodId) {
-        $customerId = $order['customer']['id'] ?? WHMCS\Database\Capsule::table('mod_revolut_customers')->where('client_id', $session->client_id)->value('customer_id');
+        $customerId = $order['customer']['id'] ?? revolut_customer_id_for_client($session->client_id);
         $remoteToken = RevolutToken::encode($customerId, $paymentMethodId);
         $lastFour = $method['card_last_four'] ?? $method['last_four'] ?? '0000';
         $expiry = preg_replace('/[^0-9]/', '', (string) ($method['card_expiry'] ?? '')); if (strlen($expiry) !== 4) $expiry = '0129';

@@ -41,6 +41,30 @@ function revolut_ensure_tables()
     }
 }
 
+/**
+ * Return the customer mapping column names used by this installation.
+ * Older releases created whmcs_client_id/revolut_customer_id, while
+ * fresh installations use client_id/customer_id. Supporting both avoids a
+ * destructive migration and preserves existing saved-card customer mappings.
+ */
+function revolut_customer_columns()
+{
+    $schema = Capsule::schema();
+    if ($schema->hasColumn('mod_revolut_customers', 'whmcs_client_id')) {
+        return ['client' => 'whmcs_client_id', 'customer' => 'revolut_customer_id'];
+    }
+    return ['client' => 'client_id', 'customer' => 'customer_id'];
+}
+
+function revolut_customer_id_for_client($clientId)
+{
+    revolut_ensure_tables();
+    $columns = revolut_customer_columns();
+    return Capsule::table('mod_revolut_customers')
+        ->where($columns['client'], (int) $clientId)
+        ->value($columns['customer']);
+}
+
 function revolut_minor_units($amount, $currency)
 {
     $zero = ['BIF','CLP','DJF','GNF','ISK','JPY','KMF','KRW','PYG','RWF','UGX','UYI','VND','VUV','XAF','XOF','XPF'];

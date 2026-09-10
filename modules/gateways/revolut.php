@@ -33,14 +33,17 @@ function revolut_get_or_create_customer(RevolutClient $client, array $params)
 {
     revolut_ensure_tables();
     $clientId = (int) $params['clientdetails']['id'];
-    $row = Capsule::table('mod_revolut_customers')->where('client_id', $clientId)->first();
-    if ($row) return $row->customer_id;
+    $columns = revolut_customer_columns();
+    $row = Capsule::table('mod_revolut_customers')->where($columns['client'], $clientId)->first();
+    if ($row && !empty($row->{$columns['customer']})) return $row->{$columns['customer']};
     $customer = $client->post('/api/customers', [
         'email' => (string) $params['clientdetails']['email'],
         'full_name' => trim(($params['clientdetails']['firstname'] ?? '') . ' ' . ($params['clientdetails']['lastname'] ?? '')),
     ]);
-    Capsule::table('mod_revolut_customers')->insert([
-        'client_id' => $clientId, 'customer_id' => $customer['id'],
+    Capsule::table('mod_revolut_customers')->updateOrInsert([
+        $columns['client'] => $clientId,
+    ], [
+        $columns['customer'] => $customer['id'],
         'created_at' => date('Y-m-d H:i:s'), 'updated_at' => date('Y-m-d H:i:s'),
     ]);
     return $customer['id'];
