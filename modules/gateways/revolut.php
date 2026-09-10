@@ -15,6 +15,10 @@ function revolut_MetaData()
     return ['DisplayName' => 'Revolut Merchant Gateway', 'APIVersion' => '1.1'];
 }
 
+function revolut_nolocalcc()
+{
+}
+
 function revolut_config()
 {
     return [
@@ -74,6 +78,8 @@ function revolut_create_order(RevolutClient $client, array $params, $customerId)
 function revolut_remoteinput($params)
 {
     try {
+        $params['amount'] = (float) ($params['amount'] ?? 0);
+        $params['currency'] = revolut_currency_for_client($params);
         $client = new RevolutClient($params);
         $customerId = revolut_get_or_create_customer($client, $params);
         $order = revolut_create_order($client, $params, $customerId);
@@ -82,13 +88,13 @@ function revolut_remoteinput($params)
             'name' => trim(($params['clientdetails']['firstname'] ?? '') . ' ' . ($params['clientdetails']['lastname'] ?? '')),
             'email' => $params['clientdetails']['email'] ?? '', 'phone' => $params['clientdetails']['phonenumber'] ?? '',
             'billingAddress' => ['countryCode' => strtoupper($params['clientdetails']['country'] ?? ''), 'region' => $params['clientdetails']['state'] ?? '', 'city' => $params['clientdetails']['city'] ?? '', 'postcode' => $params['clientdetails']['postcode'] ?? '', 'streetLine1' => $params['clientdetails']['address1'] ?? '', 'streetLine2' => $params['clientdetails']['address2'] ?? ''],
-            'orderToken' => $order['token'], 'amount' => $params['amount'] ?? 0, 'currency' => strtoupper($params['currency']),
+            'orderToken' => $order['token'], 'amount' => $params['amount'], 'currency' => $params['currency'],
         ];
         Capsule::table('mod_revolut_sessions')->insert([
             'token' => $token, 'client_id' => (int) $params['clientdetails']['id'],
             'invoice_id' => !empty($params['invoiceid']) ? (int) $params['invoiceid'] : null,
             'pay_method_id' => !empty($params['paymethodid']) ? (int) $params['paymethodid'] : null,
-            'order_id' => $order['id'], 'return_url' => $params['returnurl'] ?: ($params['systemurl'] . 'viewinvoice.php?id=' . (int) ($params['invoiceid'] ?? 0)),
+            'order_id' => $order['id'], 'return_url' => !empty($params['returnurl']) ? $params['returnurl'] : (!empty($params['invoiceid']) ? $params['systemurl'] . 'viewinvoice.php?id=' . (int) $params['invoiceid'] : $params['systemurl'] . 'index.php?rp=/account/paymentmethods'),
             'customer_json' => json_encode($customer), 'expires_at' => date('Y-m-d H:i:s', time() + 3600),
             'created_at' => date('Y-m-d H:i:s'), 'updated_at' => date('Y-m-d H:i:s'),
         ]);
@@ -102,7 +108,12 @@ function revolut_remoteinput($params)
 
 function revolut_remoteupdate($params)
 {
-    return revolut_remoteinput($params);
+    $form = revolut_remoteinput($params);
+    if (strpos($form, '<form ') !== 0) return $form;
+    $form = preg_replace('/^<form /', '<form id="revolutRemoteUpdateForm" target="revolutRemoteUpdateFrame" ', $form, 1);
+    return '<div class="text-center">' . $form
+        . '<iframe name="revolutRemoteUpdateFrame" class="auth3d-area" width="100%" height="700" scrolling="auto" src="about:blank"></iframe>'
+        . '</div><script>setTimeout(function(){var form=document.getElementById("revolutRemoteUpdateForm");if(form)form.submit()},100);</script>';
 }
 
 function revolut_capture($params)

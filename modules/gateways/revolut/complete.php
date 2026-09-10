@@ -26,13 +26,12 @@ try {
     $method = $payment['payment_method'] ?? [];
     $methodType = strtolower((string) ($method['type'] ?? ''));
     if (in_array($methodType, ['revolut_pay_card', 'revolut_pay_account'], true)) $methodType = 'revolut_pay';
-    if (in_array($methodType, ['revolut_pay_card', 'revolut_pay_account'], true)) $methodType = 'revolut_pay';
     $paymentMethodId = $method['id'] ?? '';
     if ($paymentMethodId && in_array($methodType, ['card', 'revolut_pay'], true)) {
         $customerId = $order['customer']['id'] ?? revolut_customer_id_for_client($session->client_id);
         $remoteToken = RevolutToken::encode($customerId, $paymentMethodId, $methodType);
         $lastFour = $method['card_last_four'] ?? $method['last_four'] ?? '0000';
-        $expiry = preg_replace('/[^0-9]/', '', (string) ($method['card_expiry'] ?? '')); if (strlen($expiry) !== 4) $expiry = $methodType === 'revolut_pay' ? '1299' : '0129';
+        $expiry = revolut_whmcs_expiry($method, $methodType);
         $brand = $methodType === 'revolut_pay'
             ? 'Revolut Pay'
             : ucwords(str_replace('_', ' ', $method['card_brand'] ?? $method['brand'] ?? 'Card'));
@@ -45,7 +44,7 @@ try {
         if (!$exists) addInvoicePayment($session->invoice_id, $payment['id'], revolut_major_units($payment['amount'] ?? $order['amount'], $payment['currency'] ?? $order['currency']), revolut_payment_fee($payment, $payment['currency'] ?? $order['currency']), 'revolut');
     }
     WHMCS\Database\Capsule::table('mod_revolut_sessions')->where('token', $token)->delete();
-    revolut_redirect_page($returnUrl, true);
+    revolut_redirect_page($returnUrl, true, $session->invoice_id ? '' : 'Payment method saved. Returning to your account…');
 } catch (Throwable $e) {
     logTransaction('Revolut', ['stage' => 'complete', 'order_id' => $session->order_id, 'error' => $e->getMessage()], 'Error');
     revolut_redirect_page($returnUrl, false, revolut_safe_error($e));

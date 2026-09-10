@@ -9,7 +9,8 @@ This is a community-maintained integration and is not an official Revolut or WHM
 - Secure Revolut Card Field embedded through WHMCS Remote Input
 - Optional Revolut Pay and device-eligible Apple Pay / Google Pay buttons
 - Checkout styling that follows the active WHMCS primary button color, with a return-to-invoice option
-- Saved cards for merchant-initiated recurring charges
+- Saved cards and Revolut Pay methods for merchant-initiated recurring charges
+- Account-level creation and replacement of saved Revolut payment methods
 - WHMCS-managed billing rather than Revolut subscription plans
 - Full and partial refunds with idempotent retry handling
 - Signed webhook verification and payment reconciliation
@@ -112,6 +113,8 @@ For an initial payment, the customer enters card details in Revolut's PCI-hosted
 
 For renewals, WHMCS calls `revolut_capture()` with the invoice amount. The module creates a new Revolut order and charges the saved method as a merchant-initiated transaction. It does not create or maintain Revolut subscription plans.
 
+When a customer adds or replaces a method under **Account → Payment Methods**, the module uses Revolut's zero-amount authorisation flow. No charge is taken. WHMCS represents every Remote Input method as a card; because a saved Revolut Pay account has no card expiry, the module supplies a future display-only expiry while the Revolut token remains authoritative.
+
 ## Refunds
 
 WHMCS calls `revolut_refund()` for full or partial refunds. The module resolves the original Revolut order, submits an idempotent refund request, and returns the refund order identifier to WHMCS. Revolut processes refunds asynchronously, so the Merchant portal can show a refund as pending before settlement completes.
@@ -132,6 +135,7 @@ Use Revolut Sandbox before enabling production keys:
 6. Replay a signed webhook and confirm no duplicate transaction is created.
 7. Enable Revolut Pay with a matching public key, complete a payment, and test a later **Attempt Capture** against the saved Revolut Pay method.
 8. On an eligible production device, complete an Apple Pay or Google Pay invoice and confirm the existing recurring Pay Method is unchanged.
+9. Add and replace a Revolut method under **Account → Payment Methods** and confirm that no payment is charged.
 
 ## Security
 

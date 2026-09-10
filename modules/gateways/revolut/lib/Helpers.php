@@ -65,6 +65,38 @@ function revolut_customer_id_for_client($clientId)
         ->value($columns['customer']);
 }
 
+function revolut_currency_for_client(array $params)
+{
+    $currency = strtoupper(trim((string) ($params['currency'] ?? '')));
+    if ($currency !== '') return $currency;
+
+    $currencyId = Capsule::table('tblclients')
+        ->where('id', (int) ($params['clientdetails']['id'] ?? 0))
+        ->value('currency');
+    $currency = strtoupper((string) Capsule::table('tblcurrencies')
+        ->where('id', (int) $currencyId)
+        ->value('code'));
+    if ($currency === '') throw new RuntimeException('Could not determine the client currency.');
+    return $currency;
+}
+
+function revolut_whmcs_expiry(array $method, $methodType)
+{
+    $expiry = preg_replace('/[^0-9]/', '', (string) ($method['card_expiry'] ?? ''));
+    if (strlen($expiry) === 4) return $expiry;
+
+    $month = (int) ($method['expiry_month'] ?? 0);
+    $year = (int) ($method['expiry_year'] ?? 0);
+    if ($month >= 1 && $month <= 12 && $year >= 2000) {
+        return sprintf('%02d%02d', $month, $year % 100);
+    }
+
+    // WHMCS models every remote input method as a card and requires an
+    // expiry, even though Revolut Pay account methods do not expire.
+    if ($methodType === 'revolut_pay') return '12' . date('y', strtotime('+10 years'));
+    return '01' . date('y', strtotime('+3 years'));
+}
+
 function revolut_minor_units($amount, $currency)
 {
     $zero = ['BIF','CLP','DJF','GNF','ISK','JPY','KMF','KRW','PYG','RWF','UGX','UYI','VND','VUV','XAF','XOF','XPF'];
