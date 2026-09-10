@@ -7,6 +7,7 @@ This is a community-maintained integration and is not an official Revolut or WHM
 ## Features
 
 - Secure Revolut Card Field embedded through WHMCS Remote Input
+- Checkout styling that follows the active WHMCS primary button color, with a return-to-invoice option
 - Saved cards for merchant-initiated recurring charges
 - WHMCS-managed billing rather than Revolut subscription plans
 - Full and partial refunds with idempotent retry handling
