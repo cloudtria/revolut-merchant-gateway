@@ -138,12 +138,17 @@ function revolut_refund($params)
         if ($orderId === '') throw new RuntimeException('Could not resolve the Revolut order for this transaction.');
 
         $minorAmount = revolut_minor_units($params['amount'], $params['currency']);
+        // Revolut limits idempotency keys to 50 characters. Payment IDs are
+        // UUIDs, so using them verbatim with a prefix exceeds that limit.
+        $refundIdempotencyKey = 'whmcs-refund-' . substr(hash('sha256',
+            $params['transid'] . '|' . $minorAmount . '|' . strtoupper($params['currency'])
+        ), 0, 32);
         $refund = $client->post('/api/orders/' . rawurlencode($orderId) . '/refund', [
             'amount' => revolut_minor_units($params['amount'], $params['currency']), 'currency' => strtoupper($params['currency']),
             'description' => 'WHMCS refund for transaction ' . $params['transid'],
             'merchant_order_data' => ['reference' => 'WHMCS-REFUND-' . (int) $params['invoiceid'] . '-' . $minorAmount],
             'metadata' => ['whmcs_invoice_id' => (string) (int) $params['invoiceid'], 'original_payment_id' => (string) $params['transid']],
-        ], 'whmcs-refund-' . $params['transid'] . '-' . $minorAmount);
+        ], $refundIdempotencyKey);
 
         logTransaction('Revolut', [
             'stage' => 'refund',
