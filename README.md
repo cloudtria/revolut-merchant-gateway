@@ -27,8 +27,8 @@ This is a community-maintained integration and is not an official Revolut or WHM
 
 ## Installation
 
-1. Copy `modules/gateways/` into the WHMCS `modules/gateways/` directory.
-2. Copy `whmcs.json` and `logo.svg` to the WHMCS installation root for the enhanced Apps & Integrations listing.
+1. Copy the release package's `modules/gateways/` directory into the WHMCS installation's `modules/gateways/` directory, preserving its structure.
+2. Confirm `modules/gateways/revolut/whmcs.json` and `modules/gateways/revolut/revolut-logo.png` were uploaded. WHMCS uses these for the enhanced Apps & Integrations listing.
 3. In WHMCS, open **Configuration → Apps & Integrations**, locate **Revolut Merchant Gateway**, and activate it.
 4. Configure the gateway fields described below.
 5. Register the webhook endpoint with Revolut.
