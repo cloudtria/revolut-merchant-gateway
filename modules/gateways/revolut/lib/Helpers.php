@@ -78,6 +78,21 @@ function revolut_major_units($amount, $currency)
     return revolut_minor_units(1, $currency) ? ((float) $amount / revolut_minor_units(1, $currency)) : (float) $amount;
 }
 
+function revolut_order_reference($format, array $params, $fallback)
+{
+    $invoiceId = (int) ($params['invoiceid'] ?? 0);
+    $replacements = [
+        '{invoice_id}' => (string) $invoiceId,
+        '{client_id}' => (string) (int) ($params['clientdetails']['id'] ?? 0),
+        '{amount}' => (string) ($params['amount'] ?? ''),
+        '{currency}' => strtoupper((string) ($params['currency'] ?? '')),
+        '{company_name}' => trim((string) ($params['companyname'] ?? '')),
+    ];
+    $reference = trim(strtr((string) $format, $replacements));
+    if ($reference === '') $reference = strtr($fallback, $replacements);
+    return substr($reference, 0, 200);
+}
+
 function revolut_payment_fee(array $payment, $invoiceCurrency)
 {
     $total = 0;

@@ -2,4 +2,8 @@
 /tests/
 /tests2/
 .secrets
-whmcs.json
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log

@@ -1,0 +1,28 @@
+{
+  "schema": "1.0",
+  "type": "whmcs-gateways",
+  "name": "revolut-merchant-gateway",
+  "license": "MIT",
+  "category": "payments",
+  "description": {
+    "name": "Revolut Merchant Gateway",
+    "tagline": "Accept tokenised card payments through the Revolut Merchant API.",
+    "long": "A community-maintained WHMCS gateway for secure remote card input, saved merchant payment methods, WHMCS-managed recurring charges, refunds, fee recording, transaction information, and signed webhook reconciliation.",
+    "features": ["PCI-conscious remote card input", "Saved payment methods", "WHMCS-managed recurring capture", "Full and partial refunds", "Signed webhook reconciliation", "Configurable customer-facing references"]
+  },
+  "logo": {
+    "filename": "logo.svg"
+  },
+  "support": {
+    "homepage": "https://github.com/cloudtria/revolut-merchant-gateway",
+    "learn_more": "https://github.com/cloudtria/revolut-merchant-gateway#readme",
+    "support_url": "https://github.com/cloudtria/revolut-merchant-gateway/issues",
+    "docs_url": "https://github.com/cloudtria/revolut-merchant-gateway#readme"
+  },
+  "authors": [
+    {
+      "name": "Revolut Merchant Gateway Contributors",
+      "homepage": "https://github.com/cloudtria/revolut-merchant-gateway/graphs/contributors"
+    }
+  ]
+}

@@ -25,6 +25,10 @@ function revolut_config()
         'apiVersion' => ['FriendlyName' => 'API Version', 'Type' => 'text', 'Default' => '2026-08-17'],
         'webhookSecret' => ['FriendlyName' => 'Webhook Signing Secret', 'Type' => 'password', 'Size' => '80'],
         'checkoutSdkUrl' => ['FriendlyName' => 'Checkout SDK URL', 'Type' => 'text', 'Default' => 'https://merchant.revolut.com/embed.js'],
+        'paymentReferenceFormat' => ['FriendlyName' => 'Payment Reference', 'Type' => 'text', 'Size' => '60', 'Default' => 'Invoice-{invoice_id}', 'Description' => 'Customer-visible Revolut order reference. Tokens: {invoice_id}, {client_id}, {amount}, {currency}, {company_name}.'],
+        'paymentDescriptionFormat' => ['FriendlyName' => 'Payment Description', 'Type' => 'text', 'Size' => '60', 'Default' => 'Invoice #{invoice_id}', 'Description' => 'Customer-visible Revolut payment description. Supports the same tokens as Payment Reference.'],
+        'refundReferenceFormat' => ['FriendlyName' => 'Refund Reference', 'Type' => 'text', 'Size' => '60', 'Default' => 'Refund-{invoice_id}', 'Description' => 'Customer-visible Revolut refund reference. Supports the same tokens as Payment Reference.'],
+        'refundDescriptionFormat' => ['FriendlyName' => 'Refund Description', 'Type' => 'text', 'Size' => '60', 'Default' => 'Refund for invoice #{invoice_id}', 'Description' => 'Customer-visible Revolut refund description. Supports the same tokens as Payment Reference.'],
         'debug' => ['FriendlyName' => 'Debug Logging', 'Type' => 'yesno', 'Description' => 'Log non-sensitive Revolut responses while testing.'],
     ];
 }
@@ -52,13 +56,15 @@ function revolut_get_or_create_customer(RevolutClient $client, array $params)
 function revolut_create_order(RevolutClient $client, array $params, $customerId)
 {
     $invoiceId = isset($params['invoiceid']) ? (int) $params['invoiceid'] : 0;
+    $reference = revolut_order_reference($params['paymentReferenceFormat'] ?? '', $params, 'Invoice-{invoice_id}');
+    $description = revolut_order_reference($params['paymentDescriptionFormat'] ?? '', $params, 'Invoice #{invoice_id}');
     return $client->post('/api/orders', [
         'amount' => revolut_minor_units($params['amount'] ?? 0, $params['currency']),
         'currency' => strtoupper($params['currency']),
         'capture_mode' => 'automatic',
         'customer' => ['id' => $customerId],
-        'description' => $invoiceId ? 'WHMCS invoice #' . $invoiceId : 'Save payment method',
-        'merchant_order_data' => ['reference' => $invoiceId ? 'WHMCS-INV-' . $invoiceId : 'WHMCS-CARD-' . (int) $params['clientdetails']['id']],
+        'description' => $invoiceId ? $description : 'Save payment method',
+        'merchant_order_data' => ['reference' => $invoiceId ? $reference : 'Card-' . (int) $params['clientdetails']['id']],
         'metadata' => ['whmcs_invoice_id' => (string) $invoiceId, 'whmcs_client_id' => (string) (int) $params['clientdetails']['id']],
     ], 'whmcs-order-' . ($invoiceId ?: ('card-' . (int) $params['clientdetails']['id'])) . '-' . bin2hex(random_bytes(8)));
 }
@@ -143,10 +149,12 @@ function revolut_refund($params)
         $refundIdempotencyKey = 'whmcs-refund-' . substr(hash('sha256',
             $params['transid'] . '|' . $minorAmount . '|' . strtoupper($params['currency'])
         ), 0, 32);
+        $refundReference = revolut_order_reference($params['refundReferenceFormat'] ?? '', $params, 'Refund-{invoice_id}');
+        $refundDescription = revolut_order_reference($params['refundDescriptionFormat'] ?? '', $params, 'Refund for invoice #{invoice_id}');
         $refund = $client->post('/api/orders/' . rawurlencode($orderId) . '/refund', [
             'amount' => revolut_minor_units($params['amount'], $params['currency']), 'currency' => strtoupper($params['currency']),
-            'description' => 'WHMCS refund for transaction ' . $params['transid'],
-            'merchant_order_data' => ['reference' => 'WHMCS-REFUND-' . (int) $params['invoiceid'] . '-' . $minorAmount],
+            'description' => $refundDescription,
+            'merchant_order_data' => ['reference' => $refundReference],
             'metadata' => ['whmcs_invoice_id' => (string) (int) $params['invoiceid'], 'original_payment_id' => (string) $params['transid']],
         ], $refundIdempotencyKey);
 

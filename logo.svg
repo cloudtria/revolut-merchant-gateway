@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" role="img" aria-labelledby="title desc">
+  <title id="title">Revolut Merchant Gateway</title>
+  <desc id="desc">A neutral community gateway mark with a stylised letter R.</desc>
+  <rect width="500" height="500" rx="96" fill="#111318"/>
+  <path fill="#fff" d="M137 102h141c90 0 139 43 139 116 0 52-28 88-77 105l88 75h-96l-78-68h-39v68h-78V102Zm78 65v101h58c42 0 65-17 65-51 0-33-23-50-65-50h-58Z"/>
+  <circle cx="383" cy="385" r="48" fill="#6c5ce7"/>
+</svg>
