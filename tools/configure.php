@@ -52,8 +52,8 @@ $client = new RevolutClient(['environment' => $env, 'secretKey' => $secret]);
 $url = revolut_webhook_url();
 $events = ['ORDER_COMPLETED', 'ORDER_FAILED', 'ORDER_CANCELLED', 'ORDER_PAYMENT_DECLINED', 'ORDER_PAYMENT_FAILED'];
 $hook = null;
-foreach ($client->get('/api/webhooks') as $h) {
-    if (is_array($h) && rtrim((string) ($h['url'] ?? ''), '/') === $url) $hook = $h;
+foreach (revolut_list_webhooks($client) as $h) {
+    if (rtrim((string) ($h['url'] ?? ''), '/') === $url) $hook = $h;
 }
 if ($hook) {
     $hook = $client->get('/api/webhooks/' . rawurlencode($hook['id']));

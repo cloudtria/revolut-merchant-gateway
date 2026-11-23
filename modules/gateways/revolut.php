@@ -51,7 +51,7 @@ function revolut_config_validate(array $params)
     }
     $env = ($params['environment'] ?? 'sandbox') === 'production' ? 'Production' : 'Sandbox';
     try {
-        $hooks = (new RevolutClient($params))->get('/api/webhooks');
+        $hooks = revolut_list_webhooks(new RevolutClient($params));
     } catch (RevolutApiException $e) {
         $hint = in_array($e->getCode(), [401, 403], true) ? " Check that it is a {$env} secret key." : '';
         throw new \WHMCS\Exception\Module\InvalidConfiguration('Revolut rejected the secret key (HTTP ' . $e->getCode() . ').' . $hint);
@@ -60,8 +60,8 @@ function revolut_config_validate(array $params)
     }
     $url = revolut_webhook_url();
     $registered = false;
-    foreach ((array) $hooks as $hook) {
-        if (is_array($hook) && rtrim((string) ($hook['url'] ?? ''), '/') === $url) $registered = true;
+    foreach ($hooks as $hook) {
+        if (rtrim((string) ($hook['url'] ?? ''), '/') === $url) $registered = true;
     }
     if (!$registered) {
         throw new \WHMCS\Exception\Module\InvalidConfiguration("The key works, but no {$env} webhook is registered for {$url}. Register it (see the README) and paste its signing secret.");

@@ -104,6 +104,14 @@ function revolut_idempotency_key($prefix, $unique)
     return strlen($key) <= 50 ? $key : $prefix . substr(hash('sha256', (string) $unique), 0, 50 - strlen($prefix));
 }
 
+/** Webhooks registered for this key. Newer API versions wrap the list in "webhooks". */
+function revolut_list_webhooks(RevolutClient $client)
+{
+    $res = $client->get('/api/webhooks');
+    $list = isset($res['webhooks']) && is_array($res['webhooks']) ? $res['webhooks'] : $res;
+    return array_values(array_filter((array) $list, 'is_array'));
+}
+
 function revolut_webhook_url()
 {
     return rtrim((string) \WHMCS\Config\Setting::getValue('SystemURL'), '/') . '/modules/gateways/revolut/webhook.php';
