@@ -323,3 +323,79 @@ function revolut_wait_for_payment(RevolutClient $client, $orderId, array $paymen
     }
     return $payment;
 }
+
+/** Webhook events the module subscribes to. */
+function revolut_webhook_events()
+{
+    return [
+        'ORDER_COMPLETED', 'ORDER_FAILED', 'ORDER_CANCELLED', 'ORDER_PAYMENT_DECLINED', 'ORDER_PAYMENT_FAILED',
+        'DISPUTE_ACTION_REQUIRED', 'DISPUTE_UNDER_REVIEW', 'DISPUTE_WON', 'DISPUTE_LOST',
+    ];
+}
+
+/** The WHMCS ledger row (tblaccounts) for any of the given Revolut payment IDs. */
+function revolut_ledger_payment(array $paymentIds)
+{
+    $paymentIds = array_values(array_filter(array_map('strval', $paymentIds)));
+    if (!$paymentIds) return null;
+    return WHMCS\Database\Capsule::table('tblaccounts')
+        ->whereIn('transid', $paymentIds)->where('amountin', '>', 0)->orderBy('id')->first();
+}
+
+/**
+ * Record a refund in WHMCS without sending it to the gateway or adding credit
+ * (the money has already gone back to the customer through Revolut).
+ */
+function revolut_record_refund_in_whmcs($ledgerRow, $amount, $refundTransId, $note, $sendEmail)
+{
+    if (WHMCS\Database\Capsule::table('tblaccounts')->where('transid', $refundTransId)->exists()) return 'already recorded';
+    $refunded = (float) WHMCS\Database\Capsule::table('tblaccounts')->where('refundid', $ledgerRow->id)->sum('amountout');
+    $remaining = round((float) $ledgerRow->amountin - $refunded, 2);
+    $amount = round(min((float) $amount, $remaining), 2);
+    if ($amount <= 0) return 'nothing left to refund';
+    if (!function_exists('refundInvoicePayment')) App::load_function('invoice');
+    if (!function_exists('getCCVariables')) App::load_function('cc');
+    $result = refundInvoicePayment($ledgerRow->id, $amount, false, false, $sendEmail, $refundTransId);
+    if ($result !== 'success' && $result !== true) return 'failed: ' . (is_string($result) ? $result : json_encode($result));
+    logActivity("Revolut: {$note} recorded on Invoice #{$ledgerRow->invoiceid} ({$amount}, {$refundTransId})", (int) $ledgerRow->userid);
+    return 'recorded';
+}
+
+/**
+ * A completed refund order. Refunds requested from WHMCS are already in the
+ * ledger under the refund order ID; refunds made in the Revolut dashboard or
+ * app are not, and are recorded here.
+ */
+function revolut_record_refund_order(RevolutClient $client, array $refund)
+{
+    if (($refund['state'] ?? '') !== 'completed') return 'refund not completed';
+    $originalId = (string) ($refund['related_order_id'] ?? '');
+    if ($originalId === '') return 'no related order';
+    $original = $client->get('/api/orders/' . rawurlencode($originalId));
+    $ledger = revolut_ledger_payment(array_column($original['payments'] ?? [], 'id'));
+    if (!$ledger) return 'original payment is not in WHMCS';
+    $currency = $refund['currency'] ?? $original['currency'] ?? '';
+    return revolut_record_refund_in_whmcs($ledger, revolut_major_units($refund['amount'] ?? 0, $currency), (string) $refund['id'], 'refund made in Revolut', true);
+}
+
+/** Chargebacks: log when opened or won, record a refund when lost. */
+function revolut_handle_dispute(RevolutClient $client, $disputeId, $eventName)
+{
+    $dispute = $client->get('/api/disputes/' . rawurlencode($disputeId));
+    $payment = $dispute['payment'] ?? [];
+    $ledger = revolut_ledger_payment([$payment['id'] ?? '']);
+    $currency = $dispute['currency'] ?? $payment['currency'] ?? '';
+    $amount = revolut_major_units($dispute['amount'] ?? 0, $currency);
+    $where = $ledger ? "Invoice #{$ledger->invoiceid}" : 'payment ' . ($payment['id'] ?? '?') . ' (not in WHMCS)';
+    $state = (string) ($dispute['state'] ?? '');
+    $detail = trim(($dispute['reason_description'] ?? '') . ($state ? " [{$state}" . (!empty($dispute['substate']) ? '/' . $dispute['substate'] : '') . ']' : ''));
+    if ($state === 'lost' && $ledger) {
+        $result = revolut_record_refund_in_whmcs($ledger, $amount, 'chargeback-' . $disputeId, 'chargeback lost', false);
+    } else {
+        $due = !empty($dispute['response_due_date']) ? ', respond by ' . $dispute['response_due_date'] : '';
+        logActivity("Revolut: chargeback {$state} on {$where}: {$amount} {$currency}{$due}. {$detail} (dispute {$disputeId})", $ledger ? (int) $ledger->userid : 0);
+        $result = 'logged';
+    }
+    logTransaction('Revolut', ['event' => $eventName, 'dispute_id' => $disputeId, 'state' => $state, 'substate' => $dispute['substate'] ?? '', 'amount' => $amount, 'currency' => $currency, 'payment_id' => $payment['id'] ?? '', 'invoice_id' => $ledger ? (int) $ledger->invoiceid : 0, 'result' => $result], 'Chargeback ' . ($state ?: 'update'));
+    return $result;
+}

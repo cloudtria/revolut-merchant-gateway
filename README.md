@@ -86,7 +86,9 @@ Register this endpoint in the matching Revolut environment:
 https://billing.example.com/modules/gateways/revolut/webhook.php
 ```
 
-Subscribe to `ORDER_COMPLETED`, `ORDER_FAILED`, `ORDER_CANCELLED`, `ORDER_PAYMENT_FAILED`, and `ORDER_PAYMENT_DECLINED`.
+Subscribe to `ORDER_COMPLETED`, `ORDER_FAILED`, `ORDER_CANCELLED`, `ORDER_PAYMENT_FAILED`, `ORDER_PAYMENT_DECLINED`, `DISPUTE_ACTION_REQUIRED`, `DISPUTE_UNDER_REVIEW`, `DISPUTE_WON` and `DISPUTE_LOST`.
+
+Refunds made in the Revolut dashboard or app are recorded against the WHMCS invoice when they complete (no credit is added). Chargebacks are logged in the client's activity log when opened or won; a lost chargeback is recorded as a refund of the disputed amount.
 
 ```Example Webhook Subscription
 curl -sS -X POST "https://merchant.revolut.com/api/webhooks" \

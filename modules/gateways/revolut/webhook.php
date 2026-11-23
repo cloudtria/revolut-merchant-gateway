@@ -17,17 +17,27 @@ $expected = 'v1=' . hash_hmac('sha256', 'v1.' . $timestamp . '.' . $raw, $gatewa
 $valid = false; foreach ($signatures as $signature) { if (hash_equals($expected, trim($signature))) { $valid = true; break; } }
 if (!$valid) { http_response_code(401); exit('Invalid signature'); }
 $event = json_decode($raw, true);
-if (!is_array($event) || empty($event['order_id'])) { http_response_code(400); exit('Invalid payload'); }
+if (!is_array($event) || (empty($event['order_id']) && empty($event['dispute_id']))) { http_response_code(400); exit('Invalid payload'); }
 
 try {
     revolut_ensure_tables();
     $client = new RevolutClient($gateway);
+    if (!empty($event['dispute_id'])) {
+        revolut_handle_dispute($client, (string) $event['dispute_id'], (string) ($event['event'] ?? ''));
+        http_response_code(204);
+        exit;
+    }
     $order = $client->get('/api/orders/' . rawurlencode($event['order_id']));
-    // Refunds are separate orders of type "refund" that carry the invoice ID in
-    // their metadata. WHMCS already recorded the refund when it was requested,
-    // so their completion must not be booked as another invoice payment.
-    if (strtolower((string) ($order['type'] ?? 'payment')) !== 'payment') {
-        if (!empty($gateway['debug'])) logTransaction('Revolut', ['event' => $event['event'] ?? '', 'order_id' => $order['id'], 'type' => $order['type'] ?? ''], 'Webhook ignored');
+    // Refunds are separate orders of type "refund". They must never be booked
+    // as invoice payments; refunds made outside WHMCS are recorded as refunds.
+    $type = strtolower((string) ($order['type'] ?? 'payment'));
+    if ($type === 'refund') {
+        $result = revolut_record_refund_order($client, $order);
+        if (!empty($gateway['debug']) || $result === 'recorded' || strpos($result, 'failed') === 0) logTransaction('Revolut', ['event' => $event['event'] ?? '', 'order_id' => $order['id'], 'related_order_id' => $order['related_order_id'] ?? '', 'result' => $result], 'Refund webhook');
+        http_response_code(204);
+        exit;
+    }
+    if ($type !== 'payment') {
         http_response_code(204);
         exit;
     }
@@ -48,6 +58,6 @@ try {
     if (!empty($gateway['debug'])) logTransaction('Revolut', ['event' => $event['event'] ?? '', 'order_id' => $event['order_id'], 'invoice_id' => $invoiceId], 'Webhook accepted');
     http_response_code(204);
 } catch (Throwable $e) {
-    logTransaction('Revolut', ['stage' => 'webhook', 'order_id' => $event['order_id'], 'error' => $e->getMessage()], 'Error');
+    logTransaction('Revolut', ['stage' => 'webhook', 'order_id' => $event['order_id'] ?? '', 'dispute_id' => $event['dispute_id'] ?? '', 'error' => $e->getMessage()], 'Error');
     http_response_code(500); echo 'Temporary processing error';
 }

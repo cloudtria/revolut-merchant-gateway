@@ -50,12 +50,17 @@ if (!$gateway->isActiveGateway('revolut')) {
 
 $client = new RevolutClient(['environment' => $env, 'secretKey' => $secret]);
 $url = revolut_webhook_url();
-$events = ['ORDER_COMPLETED', 'ORDER_FAILED', 'ORDER_CANCELLED', 'ORDER_PAYMENT_DECLINED', 'ORDER_PAYMENT_FAILED'];
+$events = revolut_webhook_events();
 $hook = null;
 foreach (revolut_list_webhooks($client) as $h) {
     if (rtrim((string) ($h['url'] ?? ''), '/') === $url) $hook = $h;
 }
 if ($hook) {
+    $missing = array_diff($events, $hook['events'] ?? []);
+    if ($missing) {
+        $client->patch('/api/webhooks/' . rawurlencode($hook['id']), ['url' => $url, 'events' => array_values(array_unique(array_merge($hook['events'] ?? [], $events)))]);
+        echo "webhook events added: ", implode(',', $missing), "\n";
+    }
     $hook = $client->get('/api/webhooks/' . rawurlencode($hook['id']));
     echo "webhook exists: {$hook['id']}\n";
 } else {

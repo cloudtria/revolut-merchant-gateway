@@ -28,6 +28,11 @@ final class RevolutClient
         return $this->request('POST', $path, $body, $idempotencyKey);
     }
 
+    public function patch($path, array $body)
+    {
+        return $this->request('PATCH', $path, $body);
+    }
+
     private function request($method, $path, $body = null, $idempotencyKey = null)
     {
         $headers = [
