@@ -72,8 +72,13 @@ function revolut_customer_id_for_client($clientId)
 
 function revolut_currency_for_client(array $params)
 {
-    $currency = strtoupper(trim((string) ($params['currency'] ?? '')));
-    if ($currency !== '') return $currency;
+    // Usually a code, but some calls (editing a pay method) pass a currency ID
+    // or nothing at all; only accept a three-letter code here.
+    $currency = $params['currency'] ?? '';
+    if (is_array($currency)) $currency = $currency['code'] ?? '';
+    if (is_object($currency)) $currency = $currency->code ?? '';
+    $currency = strtoupper(trim((string) $currency));
+    if (preg_match('/^[A-Z]{3}$/', $currency)) return $currency;
 
     $currencyId = Capsule::table('tblclients')
         ->where('id', (int) ($params['clientdetails']['id'] ?? 0))
