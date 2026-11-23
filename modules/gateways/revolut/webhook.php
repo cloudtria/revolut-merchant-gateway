@@ -23,6 +23,14 @@ try {
     revolut_ensure_tables();
     $client = new RevolutClient($gateway);
     $order = $client->get('/api/orders/' . rawurlencode($event['order_id']));
+    // Refunds are separate orders of type "refund" that carry the invoice ID in
+    // their metadata. WHMCS already recorded the refund when it was requested,
+    // so their completion must not be booked as another invoice payment.
+    if (strtolower((string) ($order['type'] ?? 'payment')) !== 'payment') {
+        if (!empty($gateway['debug'])) logTransaction('Revolut', ['event' => $event['event'] ?? '', 'order_id' => $order['id'], 'type' => $order['type'] ?? ''], 'Webhook ignored');
+        http_response_code(204);
+        exit;
+    }
     $invoiceId = (int) ($order['metadata']['whmcs_invoice_id'] ?? 0);
     $payment = revolut_find_captured_payment($order);
     $session = WHMCS\Database\Capsule::table('mod_revolut_sessions')->where('order_id', $order['id'])->first();
