@@ -76,7 +76,7 @@ if ($public !== '') $settings['publicKey'] = $public;
 foreach ($settings as $k => $v) {
     GatewaySetting::setValue('revolut', $k, $v);
 }
-foreach (['apiVersion' => '2026-08-17', 'checkoutSdkUrl' => 'https://merchant.revolut.com/embed.js'] as $k => $v) {
+foreach (['apiVersion' => '2026-08-17'] as $k => $v) {
     if ((string) GatewaySetting::getValue('revolut', $k) === '') GatewaySetting::setValue('revolut', $k, $v);
 }
 echo "saved: environment={$env}, secret key, ", $public !== '' ? 'public key, ' : '(no public key), ', "webhook secret\n";

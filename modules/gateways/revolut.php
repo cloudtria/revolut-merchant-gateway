@@ -30,7 +30,7 @@ function revolut_config()
         'environment' => ['FriendlyName' => 'Environment', 'Type' => 'dropdown', 'Options' => ['sandbox' => 'Sandbox', 'production' => 'Production'], 'Default' => 'sandbox'],
         'apiVersion' => ['FriendlyName' => 'API Version', 'Type' => 'text', 'Default' => '2026-08-17'],
         'webhookSecret' => ['FriendlyName' => 'Webhook Signing Secret', 'Type' => 'password', 'Size' => '80', 'Description' => 'Register <code>' . htmlspecialchars(revolut_webhook_url(), ENT_QUOTES, 'UTF-8') . '</code> in the same Revolut environment and paste its signing secret here.'],
-        'checkoutSdkUrl' => ['FriendlyName' => 'Checkout SDK URL', 'Type' => 'text', 'Default' => 'https://merchant.revolut.com/embed.js'],
+        'checkoutSdkUrl' => ['FriendlyName' => 'Checkout SDK URL', 'Type' => 'text', 'Size' => '60', 'Description' => 'Leave blank to use Revolut\'s script for the selected environment.'],
         'paymentReferenceFormat' => ['FriendlyName' => 'Payment Reference', 'Type' => 'text', 'Size' => '60', 'Default' => 'Invoice-{invoice_id}', 'Description' => 'Customer-visible Revolut order reference. Tokens: {invoice_id}, {client_id}, {amount}, {currency}, {company_name}.'],
         'paymentDescriptionFormat' => ['FriendlyName' => 'Payment Description', 'Type' => 'text', 'Size' => '60', 'Default' => 'Invoice #{invoice_id}', 'Description' => 'Customer-visible Revolut payment description. Supports the same tokens as Payment Reference.'],
         'refundReferenceFormat' => ['FriendlyName' => 'Refund Reference', 'Type' => 'text', 'Size' => '60', 'Default' => 'Refund-{invoice_id}', 'Description' => 'Customer-visible Revolut refund reference. Supports the same tokens as Payment Reference.'],

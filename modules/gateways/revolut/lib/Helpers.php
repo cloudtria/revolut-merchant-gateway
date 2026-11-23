@@ -112,6 +112,20 @@ function revolut_list_webhooks(RevolutClient $client)
     return array_values(array_filter((array) $list, 'is_array'));
 }
 
+/**
+ * Revolut serves a separate embed.js per environment and the script host must
+ * match the order's environment (a sandbox order is "not found" by the
+ * production script). Only a custom URL in the settings overrides this.
+ */
+function revolut_sdk_url(array $gateway)
+{
+    $sandbox = ($gateway['environment'] ?? 'sandbox') !== 'production';
+    $default = $sandbox ? 'https://sandbox-merchant.revolut.com/embed.js' : 'https://merchant.revolut.com/embed.js';
+    $custom = trim((string) ($gateway['checkoutSdkUrl'] ?? ''));
+    $stock = ['', 'https://merchant.revolut.com/embed.js', 'https://sandbox-merchant.revolut.com/embed.js'];
+    return in_array($custom, $stock, true) ? $default : $custom;
+}
+
 function revolut_webhook_url()
 {
     return rtrim((string) \WHMCS\Config\Setting::getValue('SystemURL'), '/') . '/modules/gateways/revolut/webhook.php';
