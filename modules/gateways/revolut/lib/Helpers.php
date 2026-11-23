@@ -28,7 +28,12 @@ function revolut_ensure_tables()
             $table->string('return_url', 1024);
             $table->text('customer_json');
             $table->timestamp('expires_at');
+            $table->timestamp('completed_at')->nullable();
             $table->timestamps();
+        });
+    } elseif (!$schema->hasColumn('mod_revolut_sessions', 'completed_at')) {
+        $schema->table('mod_revolut_sessions', function ($table) {
+            $table->timestamp('completed_at')->nullable();
         });
     }
     if (!$schema->hasTable('mod_revolut_transactions')) {
@@ -205,4 +210,64 @@ function revolut_find_captured_payment(array $order)
         if (in_array($payment['state'] ?? '', ['captured', 'completed'], true)) return $payment;
     }
     return null;
+}
+
+/**
+ * Re-read an order until its payment settles. Card Field reports success as
+ * soon as the payment is authorised; capture follows a few seconds later.
+ */
+function revolut_wait_for_order(RevolutClient $client, $orderId, $seconds = 12)
+{
+    $deadline = microtime(true) + $seconds;
+    while (true) {
+        $order = $client->get('/api/orders/' . rawurlencode($orderId));
+        $state = $order['state'] ?? '';
+        if (revolut_find_captured_payment($order) || in_array($state, ['completed', 'failed', 'cancelled'], true) || microtime(true) >= $deadline) {
+            return $order;
+        }
+        usleep(1500000);
+    }
+}
+
+/**
+ * Finish a checkout session from a settled order: save the payment method and
+ * record the invoice payment. Called by both complete.php and the webhook, so
+ * whichever runs first does the work and the other finds it done.
+ * Returns 'done', 'already' or 'pending'.
+ */
+function revolut_finalise_session($session, array $order)
+{
+    $payment = revolut_find_captured_payment($order);
+    if (!$payment) return 'pending';
+    $claimed = WHMCS\Database\Capsule::table('mod_revolut_sessions')
+        ->where('token', $session->token)->whereNull('completed_at')
+        ->update(['completed_at' => date('Y-m-d H:i:s'), 'updated_at' => date('Y-m-d H:i:s')]);
+
+    if ($claimed) {
+        $method = $payment['payment_method'] ?? [];
+        $methodType = strtolower((string) ($method['type'] ?? ''));
+        if (in_array($methodType, ['revolut_pay_card', 'revolut_pay_account'], true)) $methodType = 'revolut_pay';
+        $paymentMethodId = $method['id'] ?? '';
+        if ($paymentMethodId && in_array($methodType, ['card', 'revolut_pay'], true)) {
+            $customerId = $order['customer']['id'] ?? revolut_customer_id_for_client($session->client_id);
+            $remoteToken = RevolutToken::encode($customerId, $paymentMethodId, $methodType);
+            $lastFour = $method['card_last_four'] ?? $method['last_four'] ?? '0000';
+            $expiry = revolut_whmcs_expiry($method, $methodType);
+            $brand = $methodType === 'revolut_pay'
+                ? 'Revolut Pay'
+                : ucwords(str_replace('_', ' ', $method['card_brand'] ?? $method['brand'] ?? 'Card'));
+            if ($session->pay_method_id) {
+                updateCardPayMethod($session->client_id, $session->pay_method_id, $expiry, null, null, $remoteToken);
+            } else {
+                createCardPayMethod($session->client_id, 'revolut', $lastFour, $expiry, $brand, null, null, $remoteToken, 'billing', $methodType === 'revolut_pay' ? 'Revolut Pay' : 'Revolut - ' . $brand . '-' . $lastFour);
+            }
+        }
+    }
+
+    WHMCS\Database\Capsule::table('mod_revolut_transactions')->updateOrInsert(['payment_id' => $payment['id']], ['order_id' => $order['id'], 'invoice_id' => $session->invoice_id, 'updated_at' => date('Y-m-d H:i:s'), 'created_at' => date('Y-m-d H:i:s')]);
+    if ($session->invoice_id && !WHMCS\Database\Capsule::table('tblaccounts')->where('transid', $payment['id'])->exists()) {
+        $currency = $payment['currency'] ?? $order['currency'];
+        addInvoicePayment($session->invoice_id, $payment['id'], revolut_major_units($payment['amount'] ?? $order['amount'], $currency), revolut_payment_fee($payment, $currency), 'revolut');
+    }
+    return $claimed ? 'done' : 'already';
 }

@@ -25,7 +25,12 @@ try {
     $order = $client->get('/api/orders/' . rawurlencode($event['order_id']));
     $invoiceId = (int) ($order['metadata']['whmcs_invoice_id'] ?? 0);
     $payment = revolut_find_captured_payment($order);
-    if ($invoiceId && $payment) {
+    $session = WHMCS\Database\Capsule::table('mod_revolut_sessions')->where('order_id', $order['id'])->first();
+    if ($session) {
+        // Checkout session (new card, Revolut Pay or wallet): save the method too.
+        if ($session->invoice_id) checkCbInvoiceID((int) $session->invoice_id, 'revolut');
+        revolut_finalise_session($session, $order);
+    } elseif ($invoiceId && $payment) {
         checkCbInvoiceID($invoiceId, 'revolut');
         WHMCS\Database\Capsule::table('mod_revolut_transactions')->updateOrInsert(['payment_id' => $payment['id']], ['order_id' => $order['id'], 'invoice_id' => $invoiceId, 'updated_at' => date('Y-m-d H:i:s'), 'created_at' => date('Y-m-d H:i:s')]);
         if (!WHMCS\Database\Capsule::table('tblaccounts')->where('transid', $payment['id'])->exists()) {
