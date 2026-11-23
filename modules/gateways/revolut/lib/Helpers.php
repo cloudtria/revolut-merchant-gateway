@@ -356,7 +356,8 @@ function revolut_record_refund_in_whmcs($ledgerRow, $amount, $refundTransId, $no
     if (!function_exists('refundInvoicePayment')) App::load_function('invoice');
     if (!function_exists('getCCVariables')) App::load_function('cc');
     $result = refundInvoicePayment($ledgerRow->id, $amount, false, false, $sendEmail, $refundTransId);
-    if ($result !== 'success' && $result !== true) return 'failed: ' . (is_string($result) ? $result : json_encode($result));
+    // Recording without a gateway call returns "manual"; a gateway refund returns "success".
+    if (!in_array($result, ['manual', 'success', true], true)) return 'failed: ' . (is_string($result) ? $result : json_encode($result));
     logActivity("Revolut: {$note} recorded on Invoice #{$ledgerRow->invoiceid} ({$amount}, {$refundTransId})", (int) $ledgerRow->userid);
     return 'recorded';
 }
