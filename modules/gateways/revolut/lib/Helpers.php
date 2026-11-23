@@ -271,3 +271,50 @@ function revolut_finalise_session($session, array $order)
     }
     return $claimed ? 'done' : 'already';
 }
+
+/**
+ * WHMCS does not always pass full client details (editing an existing pay
+ * method sends very little). Fill the gaps from the client record, found via
+ * the details, the pay method's owner, or the logged-in client.
+ */
+function revolut_resolve_client(array $params)
+{
+    $details = (array) ($params['clientdetails'] ?? []);
+    $clientId = (int) ($details['id'] ?? $details['userid'] ?? $details['client_id'] ?? $params['clientId'] ?? $params['userid'] ?? 0);
+    if (!$clientId && !empty($params['paymethodid'])) {
+        $clientId = (int) WHMCS\Database\Capsule::table('tblpaymethods')->where('id', (int) $params['paymethodid'])->value('userid');
+    }
+    if (!$clientId) {
+        try { $client = class_exists('Auth') ? \Auth::client() : null; if ($client) $clientId = (int) $client->id; } catch (Throwable $e) {}
+    }
+    if (!$clientId && !empty($_SESSION['uid'])) $clientId = (int) $_SESSION['uid'];
+    if (!$clientId) throw new RuntimeException('Could not determine the client for this payment method.');
+    $row = WHMCS\Database\Capsule::table('tblclients')->where('id', $clientId)->first();
+    if (!$row) throw new RuntimeException('Client ' . $clientId . ' was not found.');
+    $fromDb = [
+        'id' => $clientId, 'firstname' => $row->firstname, 'lastname' => $row->lastname, 'email' => $row->email,
+        'phonenumber' => $row->phonenumber, 'country' => $row->country, 'state' => $row->state, 'city' => $row->city,
+        'postcode' => $row->postcode, 'address1' => $row->address1, 'address2' => $row->address2,
+    ];
+    foreach ($fromDb as $k => $v) {
+        if (!isset($details[$k]) || trim((string) $details[$k]) === '') $details[$k] = $v;
+    }
+    $details['id'] = $clientId;
+    $params['clientdetails'] = $details;
+    return $params;
+}
+
+/** Re-read an order until the given payment leaves its in-flight states. */
+function revolut_wait_for_payment(RevolutClient $client, $orderId, array $payment, $seconds = 10)
+{
+    $deadline = microtime(true) + $seconds;
+    $final = ['captured', 'completed', 'declined', 'failed', 'cancelled'];
+    while (!in_array($payment['state'] ?? '', $final, true) && microtime(true) < $deadline) {
+        usleep(1500000);
+        $order = $client->get('/api/orders/' . rawurlencode($orderId));
+        foreach (($order['payments'] ?? []) as $p) {
+            if (($p['id'] ?? '') === ($payment['id'] ?? '')) $payment = $p;
+        }
+    }
+    return $payment;
+}

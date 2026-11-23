@@ -111,6 +111,7 @@ function revolut_remoteinput($params)
 {
     try {
         $params['amount'] = (float) ($params['amount'] ?? 0);
+        $params = revolut_resolve_client($params);
         $params['currency'] = revolut_currency_for_client($params);
         $client = new RevolutClient($params);
         $customerId = revolut_get_or_create_customer($client, $params);
@@ -160,6 +161,7 @@ function revolut_capture($params)
             'saved_payment_method' => ['type' => $saved['type'], 'id' => $saved['payment_method_id'], 'initiator' => 'merchant'],
         ], revolut_idempotency_key('whmcs-payment-', $order['id']));
         Capsule::table('mod_revolut_transactions')->updateOrInsert(['payment_id' => $payment['id']], ['order_id' => $order['id'], 'invoice_id' => (int) $params['invoiceid'], 'updated_at' => date('Y-m-d H:i:s'), 'created_at' => date('Y-m-d H:i:s')]);
+        $payment = revolut_wait_for_payment($client, $order['id'], $payment);
         $state = $payment['state'] ?? '';
         if (in_array($state, ['captured', 'completed'], true)) {
             return ['status' => 'success', 'transid' => $payment['id'], 'fee' => revolut_payment_fee($payment, $params['currency']), 'rawdata' => $payment];
