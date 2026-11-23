@@ -105,7 +105,17 @@ curl -sS -X POST "https://merchant.revolut.com/api/webhooks" \
   }' | jq
 ```
 
-Copy the returned signing secret into **Webhook Signing Secret** in WHMCS. The endpoint validates Revolut's HMAC-SHA256 signature and rejects timestamps outside a five-minute tolerance.
+Copy the returned signing secret into **Webhook Signing Secret** in WHMCS.
+
+### Command-line setup
+
+`tools/configure.php` does the whole setup from the server without keys passing through a browser: it activates the gateway, saves the keys and environment, registers the webhook for the install's System URL (or reuses the existing one) and stores its signing secret. Keep the keys in a root-only file of `KEY=value` lines (`REVOLUT_SANDBOX_SECRET`, `REVOLUT_SANDBOX_PUBLIC`, `REVOLUT_PRODUCTION_SECRET`, `REVOLUT_PRODUCTION_PUBLIC`) and pipe it in:
+
+```bash
+sudo cat /etc/revolut.env | sudo -u <site user> php tools/configure.php /path/to/whmcs sandbox
+```
+
+Saving the gateway settings in WHMCS also checks the secret key against the selected environment and confirms a webhook is registered for this install. The endpoint validates Revolut's HMAC-SHA256 signature and rejects timestamps outside a five-minute tolerance.
 
 ## Billing architecture
 

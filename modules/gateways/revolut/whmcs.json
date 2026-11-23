@@ -1,7 +1,7 @@
 {
   "schema": "1.0",
   "type": "whmcs-gateways",
-  "name": "revolut-merchant-gateway",
+  "name": "revolut",
   "license": "MIT",
   "category": "payments",
   "description": {

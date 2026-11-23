@@ -97,6 +97,18 @@ function revolut_whmcs_expiry(array $method, $methodType)
     return '01' . date('y', strtotime('+3 years'));
 }
 
+/** Revolut limits idempotency keys to 50 characters. */
+function revolut_idempotency_key($prefix, $unique)
+{
+    $key = $prefix . $unique;
+    return strlen($key) <= 50 ? $key : $prefix . substr(hash('sha256', (string) $unique), 0, 50 - strlen($prefix));
+}
+
+function revolut_webhook_url()
+{
+    return rtrim((string) \WHMCS\Config\Setting::getValue('SystemURL'), '/') . '/modules/gateways/revolut/webhook.php';
+}
+
 function revolut_minor_units($amount, $currency)
 {
     $zero = ['BIF','CLP','DJF','GNF','ISK','JPY','KMF','KRW','PYG','RWF','UGX','UYI','VND','VUV','XAF','XOF','XPF'];

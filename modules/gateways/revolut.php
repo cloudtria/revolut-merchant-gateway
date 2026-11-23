@@ -29,7 +29,7 @@ function revolut_config()
         'enableWallets' => ['FriendlyName' => 'Enable Apple Pay / Google Pay', 'Type' => 'yesno', 'Description' => 'Offer available wallets for one-time invoice payments. Requires the Public Key; Apple Pay also requires domain registration.'],
         'environment' => ['FriendlyName' => 'Environment', 'Type' => 'dropdown', 'Options' => ['sandbox' => 'Sandbox', 'production' => 'Production'], 'Default' => 'sandbox'],
         'apiVersion' => ['FriendlyName' => 'API Version', 'Type' => 'text', 'Default' => '2026-08-17'],
-        'webhookSecret' => ['FriendlyName' => 'Webhook Signing Secret', 'Type' => 'password', 'Size' => '80'],
+        'webhookSecret' => ['FriendlyName' => 'Webhook Signing Secret', 'Type' => 'password', 'Size' => '80', 'Description' => 'Register <code>' . htmlspecialchars(revolut_webhook_url(), ENT_QUOTES, 'UTF-8') . '</code> in the same Revolut environment and paste its signing secret here.'],
         'checkoutSdkUrl' => ['FriendlyName' => 'Checkout SDK URL', 'Type' => 'text', 'Default' => 'https://merchant.revolut.com/embed.js'],
         'paymentReferenceFormat' => ['FriendlyName' => 'Payment Reference', 'Type' => 'text', 'Size' => '60', 'Default' => 'Invoice-{invoice_id}', 'Description' => 'Customer-visible Revolut order reference. Tokens: {invoice_id}, {client_id}, {amount}, {currency}, {company_name}.'],
         'paymentDescriptionFormat' => ['FriendlyName' => 'Payment Description', 'Type' => 'text', 'Size' => '60', 'Default' => 'Invoice #{invoice_id}', 'Description' => 'Customer-visible Revolut payment description. Supports the same tokens as Payment Reference.'],
@@ -37,6 +37,38 @@ function revolut_config()
         'refundDescriptionFormat' => ['FriendlyName' => 'Refund Description', 'Type' => 'text', 'Size' => '60', 'Default' => 'Refund for invoice #{invoice_id}', 'Description' => 'Customer-visible Revolut refund description. Supports the same tokens as Payment Reference.'],
         'debug' => ['FriendlyName' => 'Debug Logging', 'Type' => 'yesno', 'Description' => 'Log non-sensitive Revolut responses while testing.'],
     ];
+}
+
+/**
+ * Check the keys when the configuration is saved, so a wrong key or a key for
+ * the other environment is caught here instead of at the customer's checkout.
+ */
+function revolut_config_validate(array $params)
+{
+    $key = trim((string) ($params['secretKey'] ?? ''));
+    if ($key === '' || preg_match('/^[*\x{2022}]+$/u', $key)) {
+        return; // nothing to check, or WHMCS passed the masked value back
+    }
+    $env = ($params['environment'] ?? 'sandbox') === 'production' ? 'Production' : 'Sandbox';
+    try {
+        $hooks = (new RevolutClient($params))->get('/api/webhooks');
+    } catch (RevolutApiException $e) {
+        $hint = in_array($e->getCode(), [401, 403], true) ? " Check that it is a {$env} secret key." : '';
+        throw new \WHMCS\Exception\Module\InvalidConfiguration('Revolut rejected the secret key (HTTP ' . $e->getCode() . ').' . $hint);
+    } catch (Throwable $e) {
+        throw new \WHMCS\Exception\Module\InvalidConfiguration($e->getMessage());
+    }
+    $url = revolut_webhook_url();
+    $registered = false;
+    foreach ((array) $hooks as $hook) {
+        if (is_array($hook) && rtrim((string) ($hook['url'] ?? ''), '/') === $url) $registered = true;
+    }
+    if (!$registered) {
+        throw new \WHMCS\Exception\Module\InvalidConfiguration("The key works, but no {$env} webhook is registered for {$url}. Register it (see the README) and paste its signing secret.");
+    }
+    if (trim((string) ($params['webhookSecret'] ?? '')) === '') {
+        throw new \WHMCS\Exception\Module\InvalidConfiguration('Paste the webhook signing secret for ' . $url . ', otherwise payments made away from the checkout page are not recorded.');
+    }
 }
 
 function revolut_get_or_create_customer(RevolutClient $client, array $params)
@@ -72,7 +104,7 @@ function revolut_create_order(RevolutClient $client, array $params, $customerId)
         'description' => $invoiceId ? $description : 'Save payment method',
         'merchant_order_data' => ['reference' => $invoiceId ? $reference : 'Card-' . (int) $params['clientdetails']['id']],
         'metadata' => ['whmcs_invoice_id' => (string) $invoiceId, 'whmcs_client_id' => (string) (int) $params['clientdetails']['id']],
-    ], 'whmcs-order-' . ($invoiceId ?: ('card-' . (int) $params['clientdetails']['id'])) . '-' . bin2hex(random_bytes(8)));
+    ], revolut_idempotency_key('whmcs-order-', ($invoiceId ?: ('card-' . (int) $params['clientdetails']['id'])) . '-' . bin2hex(random_bytes(8))));
 }
 
 function revolut_remoteinput($params)
@@ -84,6 +116,7 @@ function revolut_remoteinput($params)
         $customerId = revolut_get_or_create_customer($client, $params);
         $order = revolut_create_order($client, $params, $customerId);
         $token = bin2hex(random_bytes(32));
+        Capsule::table('mod_revolut_sessions')->where('expires_at', '<', date('Y-m-d H:i:s', time() - 86400))->delete();
         $customer = [
             'name' => trim(($params['clientdetails']['firstname'] ?? '') . ' ' . ($params['clientdetails']['lastname'] ?? '')),
             'email' => $params['clientdetails']['email'] ?? '', 'phone' => $params['clientdetails']['phonenumber'] ?? '',
@@ -125,7 +158,7 @@ function revolut_capture($params)
         $order = revolut_create_order($client, $params, $saved['customer_id']);
         $payment = $client->post('/api/orders/' . rawurlencode($order['id']) . '/payments', [
             'saved_payment_method' => ['type' => $saved['type'], 'id' => $saved['payment_method_id'], 'initiator' => 'merchant'],
-        ], 'whmcs-payment-' . (int) $params['invoiceid']);
+        ], revolut_idempotency_key('whmcs-payment-', $order['id']));
         Capsule::table('mod_revolut_transactions')->updateOrInsert(['payment_id' => $payment['id']], ['order_id' => $order['id'], 'invoice_id' => (int) $params['invoiceid'], 'updated_at' => date('Y-m-d H:i:s'), 'created_at' => date('Y-m-d H:i:s')]);
         $state = $payment['state'] ?? '';
         if (in_array($state, ['captured', 'completed'], true)) {
